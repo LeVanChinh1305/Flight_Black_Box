@@ -56,19 +56,64 @@
 
 
 // -------------------các giá trị mặc định và phạm vi cấu hình-------------------
-// phạm vi đo lường con quay hồi chuyển
-#define BMI_GYR_RANGE_125DPS 0x04
-#define BMI_GYR_RANGE_250DPS 0x03
-#define BMI_GYR_RANGE_500DPS 0x02
-#define BMI_GYR_RANGE_1000DPS 0x01
-#define BMI_GYR_RANGE_2000DPS 0x00
-// phạm vi đo lường gia tốc kế
-#define BMI_ACC_RANGE_2G 0x03
-#define BMI_ACC_RANGE_4G 0x05 
-#define BMI_ACC_RANGE_8G 0x08
-#define BMI_ACC_RANGE_16G 0x0C
-// tần số lấy mẫu con quay hồi chuyển và gia tốc kế
-#define BMI_ODR_0_78HZ 0x01 
+// các giá trị cấu hình chế độ hoạt động và tần số lấy mẫu của gia tốc kế
+#define BMI160_ACC_US_DISABLE     0x00
+#define BMI160_ACC_US_ENABLE      0x80
+#define BMI160_ACC_BWP_NORMAL     0x10  // acc_bwp = 010
+#define BMI160_ACC_BWP_OSR4       0x00  // acc_bwp = 000
+#define BMI160_ACC_BWP_OSR2       0x08  // acc_bwp = 001
+#define BMI160_ACC_ODR_1600HZ     0x08  // 1600Hz
+#define BMI160_ACC_ODR_800HZ      0x09  // 800Hz
+#define BMI160_ACC_ODR_400HZ      0x0A  // 400Hz
+#define BMI160_ACC_ODR_200HZ      0x0B  // 200Hz
+#define BMI160_ACC_ODR_100HZ      0x0C  // 100Hz
+#define BMI160_ACC_ODR_50HZ       0x0D  // 50Hz
+#define BMI160_ACC_ODR_25HZ       0x0E  // 25Hz
+
+// các giá trị cấu hình phạm vi đo lường của gia tốc kế
+#define BMI160_ACC_RANGE_2G       0x03
+#define BMI160_ACC_RANGE_4G       0x05
+#define BMI160_ACC_RANGE_8G       0x08
+#define BMI160_ACC_RANGE_16G      0x0C
+
+// các giá trị cấu hình con quay hồi chuyển
+#define BMI160_GYR_BWP_NORMAL     0x02  // gyr_bwp = 010
+#define BMI160_GYR_BWP_OSR4       0x00
+#define BMI160_GYR_BWP_OSR2       0x01
+#define BMI160_GYR_ODR_3200HZ     0x07  // 3200Hz
+#define BMI160_GYR_ODR_1600HZ     0x08  // 1600Hz
+#define BMI160_GYR_ODR_800HZ      0x09  // 800Hz
+#define BMI160_GYR_ODR_400HZ      0x0A  // 400Hz
+#define BMI160_GYR_ODR_200HZ      0x0B  // 200Hz
+#define BMI160_GYR_ODR_100HZ      0x0C  // 100Hz
+#define BMI160_GYR_ODR_50HZ       0x0D  // 50Hz
+#define BMI160_GYR_ODR_25HZ       0x0E  // 25Hz
+
+// các giá trị cấu hình phạm vi đo lường của con quay hồi chuyển
+#define BMI160_GYR_RANGE_2000DPS  0x00
+#define BMI160_GYR_RANGE_1000DPS  0x01
+#define BMI160_GYR_RANGE_500DPS   0x02
+#define BMI160_GYR_RANGE_250DPS   0x03
+#define BMI160_GYR_RANGE_125DPS   0x04
+
+// Các lệnh điều khiển cảm biến
+#define BMI160_CMD_SOFTRESET      0xB6
+#define BMI160_CMD_FIFO_FLUSH     0xB0
+#define BMI160_CMD_START_FOC      0x03
+
+// giá trị ID của cảm biến, dùng để kiểm tra kết nối và xác thực cảm biến khi đọc ID
+#define BMI160_CHIP_ID_VALUE      0xD1  // theo datasheet
+
+// các hệ số chuyển đổi từ giá trị thô đọc được sang đơn vị thực tế
+#define BMI160_ACC_SENS_2G        16384  // LSB/g
+#define BMI160_ACC_SENS_4G        8192   // LSB/g
+#define BMI160_ACC_SENS_8G        4096   // LSB/g
+#define BMI160_ACC_SENS_16G       2048   // LSB/g
+#define BMI160_GYR_SENS_125DPS    262.4f // LSB/deg/s
+#define BMI160_GYR_SENS_250DPS    131.2f // LSB/deg/s
+#define BMI160_GYR_SENS_500DPS    65.6f  // LSB/deg/s
+#define BMI160_GYR_SENS_1000DPS   32.8f  // LSB/deg/s
+#define BMI160_GYR_SENS_2000DPS   16.4f  // LSB/deg/s
 
 
 // cấu trúc dữ liệu để lưu trữ giá trị cảm biến
