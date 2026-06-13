@@ -12,14 +12,10 @@ extern "C" {
 // --------------------các định nghĩa về địa chỉ thanh ghi -------------------
 
 // địa chỉ của cảm biến trên bus SPI
-#define BMI160_CS_PORT GPIOA // chân CS của cảm biến được kết nối với chân PA3 trên STM32
-#define BMI160_CS_PIN  GPIO_PIN_3
+
 #define BMI160_SPI_READ_MASK  0x80
 #define BMI160_SPI_WRITE_MASK 0x7F
 
-// macro để điều khiển chân CS của cảm biến 
-#define BMI160_CS_LOW()  HAL_GPIO_WritePin(BMI160_CS_PORT, BMI160_CS_PIN, GPIO_PIN_RESET)
-#define BMI160_CS_HIGH() HAL_GPIO_WritePin(BMI160_CS_PORT, BMI160_CS_PIN, GPIO_PIN_SET)
 
 // thanh ghi đọc dữ liệu cảm biến 
 // thanh ghi đọc dữ liệu con quay hồi chuyển 
@@ -289,14 +285,16 @@ typedef struct {
 
 // cấu trúc dữ liệu để lưu trữ thông tin về cảm biến và cấu hình hiện tại của cảm biến
 typedef struct{
-    SPI_HandleTypeDef *a;       // Handle của bus SPI trên STM32 
+    SPI_HandleTypeDef *handle_spi;       // Handle của bus SPI trên STM32 
     BMI160_Config_t config;        // Cấu hình hiện tại của cảm biến
     bool is_initialized;           // Trạng thái khởi tạo thành công hay chưa
+    GPIO_TypeDef      *cs_port;    // Port của chân Chip Select (Ví dụ: GPIOA, GPIOB)
+    uint16_t          cs_pin;      // Pin của chân Chip Select (Ví dụ: GPIO_PIN_3)
 } bmi_dev_t; 
 
 
 // Hàm khởi tạo cảm biến (nhận struct quản lý, con trỏ SPI và cấu hình ban đầu)
-HAL_StatusTypeDef BMI160_Init(bmi_dev_t *dev, SPI_HandleTypeDef *a, const BMI160_Config_t *config);
+HAL_StatusTypeDef BMI160_Init(bmi_dev_t *dev, SPI_HandleTypeDef *handle_spi, GPIO_TypeDef *cs_port, uint16_t cs_pin, const BMI160_Config_t *config);
 
 // Hàm đọc dữ liệu cảm biến, bao gồm gia tốc kế, con quay hồi chuyển và nhiệt độ
 HAL_StatusTypeDef BMI160_ReadData(bmi_dev_t *dev, BMI160_Data *data);
@@ -319,9 +317,6 @@ HAL_StatusTypeDef BMI160_ReadError(bmi_dev_t *dev, uint8_t *error);
 // hàm gửi lệnh điều khiển đến cảm biến, ví dụ để reset cảm biến hoặc chuyển đổi chế độ hoạt động
 HAL_StatusTypeDef BMI160_SendCommand(bmi_dev_t *dev, uint8_t cmd);
 
-// hàm đọc dữ liệu cảm biến, bao gồm gia tốc kế, con quay hồi chuyển và nhiệt độ
-HAL_StatusTypeDef BMI160_ReadAxisData(bmi_dev_t *dev, int16_t *acc_x, int16_t *acc_y, int16_t *acc_z, int16_t *gyr_x, int16_t *gyr_y, int16_t *gyr_z);
-
 // hàm đọc dữ liệu nhiệt độ từ cảm biến
 HAL_StatusTypeDef BMI160_ReadTemperature(bmi_dev_t *dev, int16_t *temp);
 
@@ -335,5 +330,4 @@ HAL_StatusTypeDef BMI160_ConfigAccel(bmi_dev_t *dev, uint8_t config, uint8_t ran
 #ifdef __cplusplus
 }
 #endif 
-
 #endif // BMI160_H
