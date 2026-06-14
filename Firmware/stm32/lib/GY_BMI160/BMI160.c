@@ -1,7 +1,5 @@
 #include "BMI160.h"
 
-#define HAL_MAX_DELAY 1000
-
 // các hàm giao tiếp nội bộ 
 static HAL_StatusTypeDef BMI_Write_Reg(bmi_dev_t *dev, uint8_t reg_addr, uint8_t data){
     if (dev == NULL || dev->handle_spi == NULL) return HAL_ERROR;

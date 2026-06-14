@@ -69,7 +69,7 @@ void Data_Sender_Task(void *pvParameters) {
 
             build_frame(&proc, &frame);
 
-            status = HAL_UART_Transmit(&huart2,
+            status = HAL_UART_Transmit(&huart1,
                                        (uint8_t *)&frame,
                                        sizeof(UartFrame_t),
                                        DATA_SENDER_UART_TIMEOUT_MS);
