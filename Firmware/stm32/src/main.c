@@ -21,7 +21,15 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "app_types.h"
+#include "BMI160.h"
+#include "BMI_Reader.h"
+#include "BMI_Processing.h"
+#include "Data_Sender.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,8 +52,13 @@ SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
 
-/* USER CODE BEGIN PV */
+UART_HandleTypeDef huart2;   /* Debug TX only (TX=PA2, RX=PA3 không dùng) */
 
+/* USER CODE BEGIN PV */
+bmi_dev_t bmi;
+
+QueueHandle_t xQueueRaw;
+QueueHandle_t xQueueProcessed;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -53,13 +66,18 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);   /* UART2: Debug TX */
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+/* Redirect printf → UART2 TX (debug một chiều, PA2) */
+int _write(int file, char *ptr, int len) {
+  HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 100);
+  return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -93,7 +111,46 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Khởi tạo BMI160 */
+  BMI160_Config_t bmi_conf = {
+    .accel_range = BMI_ACC_RANGE_16G,
+    .gyro_range  = BMI_GYR_RANGE_2000DPS,
+    .accel_odr   = BMI_ACC_CONFIG_DEFAULT,
+    .gyro_odr    = BMI_GYR_CONFIG_DEFAULT,
+    .accel_bwp   = 0,
+    .gyro_bwp    = 0,
+  };
+  if (BMI160_Init(&bmi, &hspi1, BMI160_CS_GPIO_Port, BMI160_CS_Pin, &bmi_conf) != HAL_OK)
+  {
+    printf("[MAIN] BMI160 Init FAILED\r\n");
+    Error_Handler();
+  }
+  printf("[MAIN] BMI160 Init OK\r\n");
+
+  /* Tạo Queue */
+  xQueueRaw       = xQueueCreate(QUEUE_RAW_SIZE,       sizeof(RawSensorData_t));
+  xQueueProcessed = xQueueCreate(QUEUE_PROCESSED_SIZE, sizeof(ProcessedData_t));
+  if (xQueueRaw == NULL || xQueueProcessed == NULL)
+  {
+    printf("[MAIN] Queue create FAILED\r\n");
+    Error_Handler();
+  }
+
+  /* Khởi tạo các module */
+  BMI_Reader_Init(&bmi);
+  BMI_Processing_Init();
+  Data_Sender_Init();
+
+  /* Tạo FreeRTOS Task */
+  xTaskCreate(BMI_Reader_Task,     "ReadBMI",    256, NULL, 3, NULL);
+  xTaskCreate(BMI_Processing_Task, "ProcessBMI", 384, NULL, 2, NULL);
+  xTaskCreate(Data_Sender_Task,    "SendUART",   256, NULL, 1, NULL);
+
+  printf("[MAIN] Starting FreeRTOS scheduler\r\n");
+  vTaskStartScheduler();
 
   /* USER CODE END 2 */
 
@@ -106,7 +163,6 @@ int main(void)
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
-}
 
 /**
   * @brief System Clock Configuration
@@ -250,6 +306,28 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief USART2 Initialization Function — Debug TX only (TX=PA2)
+  *        RX=PA3 không dùng để tránh conflict với BMI160 CS (PA3)
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX;   /* chỉ TX, không RX */
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
