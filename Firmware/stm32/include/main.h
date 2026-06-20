@@ -62,8 +62,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 /* Handle ngoại vi dùng ở nhiều module */
-extern UART_HandleTypeDef huart1;   /* → ESP32      (TX=PA9,  RX=PA10) */
-extern UART_HandleTypeDef huart2;   /* Debug TX     (TX=PA2,  RX không dùng) */
+extern UART_HandleTypeDef huart1;   /* → ESP32 (TX=PA9, RX=PA10) */
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

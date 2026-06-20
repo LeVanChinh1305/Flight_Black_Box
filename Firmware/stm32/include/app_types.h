@@ -1,15 +1,15 @@
-// Định nghĩa các kiểu dữ liệu và Queue dùng chung toàn ứng dụng. 
+// Định nghĩa các kiểu dữ liệu và Queue dùng chung toàn ứng dụng.
 // Task_ReadBMI160  --[xQueueRaw]-->  Task_ProcessBMI  --[xQueueProcessed]-->  Task_SendUART
 #ifndef APP_TYPES_H
 #define APP_TYPES_H
 
-
+// FreeRTOS.h và queue.h được include trong từng .c file cần dùng,
+// không include ở đây để tránh lỗi include path khi build lib riêng lẻ.
+#include <stdint.h>
 #include "FreeRTOS.h"
 #include "queue.h"
-#include <stdint.h>
 
-// cấu trúc dữ liệu 
-// Dữ liệu thô ADC đọc trực tiếp từ BMI160 : lấy từ đầu ra của Task_ReadBMI160.
+// Dữ liệu thô ADC đọc trực tiếp từ BMI160 — đầu ra Task_ReadBMI160
 typedef struct {
     int16_t  acc_x;           // Gia tốc X thô [LSB]
     int16_t  acc_y;           // Gia tốc Y thô [LSB]
@@ -21,8 +21,7 @@ typedef struct {
     uint32_t timestamp_ms;    // Thời điểm đọc [ms từ khi boot]
 } RawSensorData_t;
 
-// Dữ liệu BMI đã quy đổi sang đơn vị vật lý.
-// Đây là đầu ra của Task_ProcessBMI, đầu vào của Task_SendUART.
+// Dữ liệu đã quy đổi sang đơn vị vật lý — đầu ra Task_ProcessBMI
 typedef struct {
     float    acc_x_g;         // Gia tốc X  [g]
     float    acc_y_g;         // Gia tốc Y  [g]
@@ -31,17 +30,16 @@ typedef struct {
     float    gyr_y_dps;       // Góc quay Y [deg/s]
     float    gyr_z_dps;       // Góc quay Z [deg/s]
     float    temp_c;          // Nhiệt độ   [°C]
-    float    pitch_deg;       // Góc pitch  [°]  (tính từ accelerometer)
-    float    roll_deg;        // Góc roll   [°]  (tính từ accelerometer)
-    uint32_t timestamp_ms;    // Kế thừa từ RawSensorData_t
+    float    pitch_deg;       // Góc pitch  [°]
+    float    roll_deg;        // Góc roll   [°]
+    uint32_t timestamp_ms;
 } ProcessedData_t;
 
-
-// QUEUE HANDLE (định nghĩa trong main.c, extern ở đây để các module dùng)
+// Queue handle (định nghĩa trong main.c, extern để các module dùng)
 extern QueueHandle_t xQueueRaw;
 extern QueueHandle_t xQueueProcessed;
-// Kích thước queue (số phần tử tối đa)
+
 #define QUEUE_RAW_SIZE       4
 #define QUEUE_PROCESSED_SIZE 4
 
-#endif
+#endif /* APP_TYPES_H */
