@@ -1,0 +1,6 @@
+"./main.obj"
+"./LoRa_SX1278/LoRa_SX1278.obj"
+"./UART_Receiver/UART_Receiver.obj"
+"../lnk_msp430f5529.cmd"
+-llibmath.a
+-llibc.a

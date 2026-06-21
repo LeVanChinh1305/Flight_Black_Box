@@ -1,0 +1,17 @@
+[
+   {
+      "directory" : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/Debug",
+      "command"   : "clang++ -I\"D:/App/CCSTUDIO/setup/ccs/ccs_base/msp430/include\" -I\"D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box\" -I\"D:/App/CCSTUDIO/setup/ccs/tools/compiler/ti-cgt-msp430_21.6.2.LTS/include\" -D__MSP430F5529__ -xc",
+      "file"      : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/LoRa_SX1278/LoRa_SX1278.c"
+   },
+   {
+      "directory" : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/Debug",
+      "command"   : "clang++ -I\"D:/App/CCSTUDIO/setup/ccs/ccs_base/msp430/include\" -I\"D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box\" -I\"D:/App/CCSTUDIO/setup/ccs/tools/compiler/ti-cgt-msp430_21.6.2.LTS/include\" -D__MSP430F5529__ -xc",
+      "file"      : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/UART_Receiver/UART_Receiver.c"
+   },
+   {
+      "directory" : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/Debug",
+      "command"   : "clang++ -I\"D:/App/CCSTUDIO/setup/ccs/ccs_base/msp430/include\" -I\"D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box\" -I\"D:/App/CCSTUDIO/setup/ccs/tools/compiler/ti-cgt-msp430_21.6.2.LTS/include\" -D__MSP430F5529__ -xc",
+      "file"      : "D:/projects/Flight_Black_Box/Firmware/MSP430F5529_black_box/main.c"
+   }
+]
