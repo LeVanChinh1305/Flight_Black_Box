@@ -37,6 +37,10 @@ pico_sdk_init()
 
 add_executable(YD_RP2040_RP2_B2 
     src/main.cpp
+    components/my_mqtt/my_mqtt.cpp
+    components/my_mqtt/my_mqtt.h
+    components/sim7080g/sim7080g.cpp
+    components/sim7080g/sim7080g.h
 )
 
 pico_set_program_name(YD_RP2040_RP2_B2 "YD_RP2040_RP2_B2")
