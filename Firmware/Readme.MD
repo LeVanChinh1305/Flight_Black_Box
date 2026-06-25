@@ -27,6 +27,19 @@ Dự án Firmware cho hệ thống "Hộp đen" (Flight Black Box), sử dụng 
 
 ## Hướng dẫn cài đặt và sử dụng
 
+components/
+├── alogithm_bmi160/      # Thuật toán tính Pitch/Roll/Lực G từ dữ liệu thô
+├── alogithm_neo6m/       # Thuật toán parse chuỗi NMEA thô ra tọa độ/vận tốc
+├── bmi160/               # Driver SPI đọc/ghi thanh ghi thô BMI160
+├── neo6m/                # Driver UART cấu hình và nhận chuỗi thô từ GPS
+├── xpt2046/              # [BỔ SUNG] Driver đọc tọa độ cảm ứng màn hình
+├── tft/                  # Driver hiển thị ILI9341 (Vẽ pixel, hình chữ nhật, chữ)
+├── sdcard/               # Driver FatFs để giao tiếp thẻ nhớ SPI
+├── sim7080g/             # Driver quản lý tập lệnh AT cho SIM
+├── my_mqtt/              # Trình quản lý giao thức và đóng gói bản tin MQTT
+├── buzzer/               # Driver điều khiển còi báo bíp bíp
+└── shared_data/          # [BỔ SUNG] Quản lý cấu trúc dữ liệu chung & Mutex giữa các Task
+
 
 ## Tiến độ dự án
 Hiện tại dự án chỉ mới khởi tạo khung dự án.

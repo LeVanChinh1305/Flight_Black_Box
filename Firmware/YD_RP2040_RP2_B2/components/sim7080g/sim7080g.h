@@ -12,7 +12,9 @@
 #define PIN_SIM_PWR   2
 
 // Khai báo các hàm giao tiếp với SIM
+// hàm khởi tạo 
 void sim_init();
+// hàm 
 void sim_send_at(const char* cmd);
 
 #endif // SIM7080G_H

@@ -41,6 +41,24 @@ add_executable(YD_RP2040_RP2_B2
     components/my_mqtt/my_mqtt.h
     components/sim7080g/sim7080g.cpp
     components/sim7080g/sim7080g.h
+    components/bmi160/bmi160.h
+    components/bmi160/bm1160.cpp
+    components/buzzer/buzzer.h
+    components/buzzer/buzzer.cpp
+    components/neo6m/neo6m.h
+    components/sdcard/sdcard.h
+    components/neo6m/neo6m.cpp
+    components/sdcard/sdcard.cpp
+    components/tft/tft.h
+    components/tft/tft.cpp
+    components/algorithm_neo6m/algorithm_neo6m.h
+    components/algorithm_neo6m/algorithm_neo6m.cpp
+    components/algorithm_bmi160/algorithm_bmi160.h
+    components/algorithm_bmi160/algorithm_bmi160.cpp
+    components/xpt2046/xpt2046.h
+    components/xpt2046/xpt2046.cpp
+    components/shared_data/shared_data.h
+    components/shared_data/shared_data.cpp
 )
 
 pico_set_program_name(YD_RP2040_RP2_B2 "YD_RP2040_RP2_B2")

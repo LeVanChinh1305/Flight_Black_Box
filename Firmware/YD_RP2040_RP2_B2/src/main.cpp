@@ -17,6 +17,8 @@ int main() {
 
     // Gọi hàm khởi tạo SIM từ file sim7080.cpp
     sim_init();
+
+    
     printf("He thong Hop den: Khoi tao cac ngoai vi hoan tat!\n");
 
     while (true) {
