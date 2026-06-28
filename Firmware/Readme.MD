@@ -35,7 +35,7 @@ components/
 ├── xpt2046/              # [BỔ SUNG] Driver đọc tọa độ cảm ứng màn hình
 ├── tft/                  # Driver hiển thị ILI9341 (Vẽ pixel, hình chữ nhật, chữ)
 ├── sdcard/               # Driver FatFs để giao tiếp thẻ nhớ SPI
-├── sim7080g/             # Driver quản lý tập lệnh AT cho SIM
+├── simA7680C/            # Driver quản lý tập lệnh AT cho SIM
 ├── my_mqtt/              # Trình quản lý giao thức và đóng gói bản tin MQTT
 ├── buzzer/               # Driver điều khiển còi báo bíp bíp
 └── shared_data/          # [BỔ SUNG] Quản lý cấu trúc dữ liệu chung & Mutex giữa các Task

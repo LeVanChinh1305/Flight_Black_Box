@@ -81,3 +81,25 @@ Kêu 1 tiếng "biiiiíp" dài liên tục: Hệ thống gặp lỗi nghiêm tr�
 
 
 Trong kịch bản thiết bị bay gặp sự cố và rơi xuống địa hình khuất (bụi cây, rãnh sâu), còi sẽ chuyển sang chế độ Phát tín hiệu định vị. Nó sẽ tự động kêu theo chu kỳ (ví dụ: cứ 3 giây kêu 1 tiếng lớn) để đội cứu hộ hoặc chính bạn có thể dễ dàng lần theo âm thanh và tìm lại Hộp đen giữa thực địa.
+
+
+tiến trình dự án
+Giai đoạn 1 — Đang làm (kết nối mạng)
+├── ✅ Khởi tạo SIM7080G
+├── 🔄 Đăng ký mạng CAT-M (đang debug)
+└── ⬜ Kết nối GPRS/data
+
+Giai đoạn 2 — Kết nối MQTT
+├── ⬜ Mở TCP tới MQTT Broker
+├── ⬜ Publish dữ liệu test
+└── ⬜ Subscribe nhận lệnh
+
+Giai đoạn 3 — Tích hợp cảm biến
+├── ⬜ Đọc GPS Neo-6M
+├── ⬜ Đọc IMU BMI160
+└── ⬜ Đóng gói JSON và gửi
+
+Giai đoạn 4 — Dashboard
+├── ⬜ Setup MQTT Broker
+├── ⬜ Hiển thị bản đồ real-time
+└── ⬜ Giao diện gửi lệnh xuống
