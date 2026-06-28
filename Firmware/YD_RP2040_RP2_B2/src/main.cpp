@@ -1,56 +1,45 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "components/sim7080g/sim7080g.h"
+#include "components/bmi160/bmi160.h"
 
-int main()
-{
+int main() {
     stdio_init_all();
-    sleep_ms(2000);
+    while (!stdio_usb_connected()) sleep_ms(100);
+    sleep_ms(500);
 
-    printf("\n--- HE THONG HOP DEN: QUET THONG SO SIM7080G ---\n");
+    printf("\n========== BMI160 I2C DEBUG : 2 ==========\n\n");
 
-    if (sim_init() != SIM_OK) {
-        printf("[FATAL] Khoi tao Module SIM that bai!\n");
-        while (1) { tight_loop_contents(); }
+    // ── cấu hình ban đầu cho cảm biến ──
+    BMI160_Config_t bmi_config = {
+        .accel_range = BMI_ACC_RANGE_2G,
+        .gyro_range  = BMI_GYR_RANGE_2000DPS,
+        .accel_odr   = BMI_ACC_CONFIG_DEFAULT,
+        .gyro_odr    = BMI_GYR_CONFIG_DEFAULT
+    };
+
+    // ── khai báo cấu trúc quản lý thiết bị ──
+    bmi_dev_t bmi_device;
+
+    // ── gọi hàm khởi tạo từ driver ──
+    // Toàn bộ công việc chi tiết (Khởi tạo bộ I2C0, cấu hình chân GPIO 20 & 21, Reset, Kiểm tra ID, Bật nguồn) đều được thực hiện bên trong Driver
+    if (BMI160_Init(&bmi_device, BMI160_I2C_PORT, BMI160_I2C_ADDR, &bmi_config) == BMI_OK) {
+        printf("\n>>> KET NOI OK! BMI160 phan hoi dung qua giao tiep I2C.\n");
+    } else {
+        printf("\n>>> LOI: Khoi tao BMI160 that bai!\n");
+        printf("    Vui long kiem tra lai day noi SDA/SCL, cap nguon, va dam bao chan CS da keo len 3V3.\n");
     }
 
-    if (sim_check_sim() != SIM_OK) {
-        printf("[FATAL] The SIM chua lap hoac bi loi!\n");
-        while (1) { tight_loop_contents(); }
-    }
-
-    char dummy[64];
-
-    // ── Cấu hình CAT-M cho SIM Viettel 4G ──
-    sim_send_at("AT+CNMP=38\r\n",  dummy, sizeof(dummy), SIM_DEFAULT_TIMEOUT_MS); // LTE only
-    sim_send_at("AT+CMNB=1\r\n",   dummy, sizeof(dummy), SIM_DEFAULT_TIMEOUT_MS); // CAT-M only
-    sim_send_at("AT+CBANDCFG=\"CAT-M\",3,28\r\n", dummy, sizeof(dummy), SIM_DEFAULT_TIMEOUT_MS); // Band 3 (1800MHz) + Band 28 (700MHz) — Viettel VN
-    sim_send_at("AT+CEREG=2\r\n",  dummy, sizeof(dummy), SIM_DEFAULT_TIMEOUT_MS); // Bật URC đăng ký mạng
-
-    // Reset radio để áp dụng cấu hình mới
-    printf("[SIM] Reset radio de ap dung cau hinh moi...\n");
-    sim_send_at("AT+CFUN=0\r\n", dummy, sizeof(dummy), 3000);
-    sleep_ms(1000);
-    sim_send_at("AT+CFUN=1\r\n", dummy, sizeof(dummy), 3000);
-    sleep_ms(8000); // Chờ radio ổn định
-
-    // Thu thập diagnostics
-    sim_get_all_diagnostics();
-
-    // Chờ đăng ký mạng CAT-M tối đa 60 giây
-    printf("[SIM] Cho dang ky mang CAT-M Viettel...\n");
-    if (sim_wait_network(60000) != SIM_OK) {
-        printf("[CANH BAO] Khong dang ky duoc mang sau 60 giay.\n");
-        printf("[CANH BAO] Kiem tra: antenna, vung phu song CAT-M Viettel khu vuc ban.\n");
-    }
-
-    // Vòng lặp giám sát liên tục 5 giây/lần
-    printf("\nChuyen sang che do tracking lien tuc...\n");
+    // ── đọc liên tục để kiểm tra ổn định ──
+    printf("\n[6] Doc CHIP_ID lien tuc moi 1 giay qua I2C:\n");
+    uint32_t count = 0;
+    uint8_t id = 0;
     while (1) {
-        printf("\n--- TRACKING STATUS ---\n");
-        sim_send_at("AT+CSQ\r\n",    NULL, 0, SIM_DEFAULT_TIMEOUT_MS); // Tín hiệu
-        sim_send_at("AT+CEREG?\r\n", NULL, 0, SIM_DEFAULT_TIMEOUT_MS); // Trạng thái mạng
-        sim_send_at("AT+COPS?\r\n",  NULL, 0, SIM_DEFAULT_TIMEOUT_MS); // Nhà mạng
-        sleep_ms(5000);
+        if (BMI160_ReadID(&bmi_device, &id) == BMI_OK) {
+            printf("    lan %lu: 0x%02X %s\n", ++count, id,
+                   id == BMI_CHIPID_VALUE ? "OK" : "FAIL");
+        } else {
+            printf("    lan %lu: Giao tiep I2C gap LOI!\n", ++count);
+        }
+        sleep_ms(1000);
     }
 }
