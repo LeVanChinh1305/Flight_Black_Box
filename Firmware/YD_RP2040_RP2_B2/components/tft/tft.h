@@ -79,6 +79,10 @@ TFT_Status TFT_DrawChar(tft_dev_t *dev, int16_t x, int16_t y, char c,
 TFT_Status TFT_DrawString(tft_dev_t *dev, int16_t x, int16_t y, const char *str,
                            uint16_t fg_color, uint16_t bg_color, uint8_t size);
 
+// hàm tô một hình chữ nhật
+TFT_Status TFT_FillRect(tft_dev_t *dev, int16_t x, int16_t y, 
+                        uint16_t w, uint16_t h, uint16_t color);
+
 // hàm bật/tắt đèn nền màn hình
 TFT_Status TFT_Backlight(tft_dev_t *dev, bool on);
 

@@ -220,3 +220,20 @@ TFT_Status TFT_DrawString(tft_dev_t *dev, int16_t x, int16_t y, const char *str,
     }
     return TFT_OK;
 }
+
+// ====================== HÀM TÔ HÌNH CHỮ NHẬT ======================
+TFT_Status TFT_FillRect(tft_dev_t *dev, int16_t x, int16_t y, 
+                        uint16_t w, uint16_t h, uint16_t color) {
+    if (dev == NULL || dev->handle_spi == NULL) return TFT_ERROR;
+    if (w == 0 || h == 0) return TFT_OK;
+
+    // Giới hạn trong màn hình
+    if (x >= TFT_WIDTH || y >= TFT_HEIGHT) return TFT_OK;
+    if (x + w > TFT_WIDTH) w = TFT_WIDTH - x;
+    if (y + h > TFT_HEIGHT) h = TFT_HEIGHT - y;
+
+    TFT_SetWindow(dev, x, y, x + w - 1, y + h - 1);
+    TFT_PushBlock(dev, color, w * h);
+
+    return TFT_OK;
+}
