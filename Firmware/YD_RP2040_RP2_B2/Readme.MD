@@ -95,8 +95,8 @@ Giai đoạn 2 — Kết nối MQTT
 └── ⬜ Subscribe nhận lệnh
 
 Giai đoạn 3 — Tích hợp cảm biến
-├── ⬜ Đọc GPS Neo-6M
-├── ⬜ Đọc IMU BMI160
+├── ✅ Đọc GPS Neo-6M
+├── ✅ Đọc IMU BMI160
 └── ⬜ Đóng gói JSON và gửi
 
 Giai đoạn 4 — Dashboard
