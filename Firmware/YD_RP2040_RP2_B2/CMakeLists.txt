@@ -59,6 +59,8 @@ add_executable(YD_RP2040_RP2_B2
     components/xpt2046/xpt2046.cpp
     components/shared_data/shared_data.h
     components/shared_data/shared_data.cpp
+    components/font5x7/font5x7.cpp
+    components/font5x7/font5x7.h
 )
 
 pico_set_program_name(YD_RP2040_RP2_B2 "YD_RP2040_RP2_B2")

@@ -54,9 +54,112 @@
 //     }
 // }
 
+
+
+
+
+
+
+//-----------------------------------------------------test neo6m------------------------------------------------------------------
+
+
+
+
+
+
+
+
+// #include <stdio.h>
+// #include "pico/stdlib.h"
+// #include "components/neo6m/neo6m.h"
+
+// int main() {
+//     // Khởi tạo luồng giao tiếp với máy tính (USB Serial Monitor)
+//     stdio_init_all();
+//     while (!stdio_usb_connected()) sleep_ms(100);
+//     sleep_ms(500);
+
+//     printf("\n========== NEO-6M GPS TESTING SYSTEM ==========\n\n");
+
+//     neo6m_dev_t gps_dev;
+//     neo6m_data_t gps_data;
+    
+//     gps_data.is_valid = false;
+//     gps_data.satellites = 0;
+
+//     // Tiến hành kết nối UART phần cứng
+//     printf("[INIT] Dang thiet lap ket noi UART cho Neo-6M...\n");
+//     if (NEO6M_Init(&gps_dev, NEO6M_UART_PORT, NEO6M_PIN_TX, NEO6M_PIN_RX, NEO6M_BAUDRATE) != NEO6M_OK) {
+//         printf("[FATAL] Khoi tao module GPS that bai! Dung chuong trinh.\n");
+//         while (1) sleep_ms(1000);
+//     }
+    
+//     printf("[OK] Module da san sang. Dang quet tin hieu...\n");
+//     printf("------------------------------------------------------------------------\n");
+
+//     uint32_t message_count = 0;
+
+//     while (1) {
+//         // Liên tục kiểm tra luồng UART nhận câu lệnh NMEA mới
+//         NEO6M_Status status = NEO6M_Update(&gps_dev, &gps_data);
+        
+//         if (status == NEO6M_OK) {
+//             message_count++;
+            
+//             // Log chuỗi thô từ module phát ra
+//             printf("[%lu] Raw NMEA: %s\n", message_count, gps_dev.nmea_buf);
+
+//             // Xử lý hiển thị trực quan nếu module đã "Khóa vị trí" (Fix vệ tinh thành công)
+//             if (gps_data.is_valid) {
+//                 // Tự động chuyển đổi từ khung giờ UTC sang giờ Việt Nam (GMT+7)
+//                 int local_hour = gps_data.hour + 7;
+//                 int local_day = gps_data.day;
+//                 int local_month = gps_data.month;
+//                 int local_year = gps_data.year;
+
+//                 if (local_hour >= 24) {
+//                     local_hour -= 24;
+//                     local_day += 1; 
+//                 }
+
+//                 printf("    >> [STATUS: FIX OK]\n");
+//                 printf("       + Thoi gian (VN): %02d:%02d:%02d  | Ngay: %02d/%02d/%04d\n", 
+//                        local_hour, gps_data.minute, gps_data.second, local_day, local_month, local_year);
+//                 printf("       + Toa do         : Lat = %.6f, Lon = %.6f\n", 
+//                        gps_data.latitude, gps_data.longitude);
+//                 printf("       + Thong so ve tinh: Bat duoc = %d ve tinh | Do chinh xac HDOP = %.2f\n", 
+//                        gps_data.satellites, gps_data.hdop);
+//                 printf("       + Van toc & Cao do: Toc do = %.2f km/h | Do cao = %.1fm\n", 
+//                        gps_data.speed_kmh, gps_data.altitude_m);
+//             } else {
+//                 printf("    >> [STATUS: NO FIX] Dang quet tim ve tinh (Ve tinh bat duoc: %d)\n", gps_data.satellites);
+//             }
+//             printf("------------------------------------------------------------------------\n");
+//         } else {
+//             // Delay cực ngắn để giải phóng CPU khi UART rảnh hoặc gặp timeout tạm thời giữa các luồng truyền tải
+//             sleep_us(100);
+//         }
+//     }
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+//---------------------------------------test tft--------------------------------------------------------------
+
+
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "components/neo6m/neo6m.h"
+#include "components/tft/tft.h"
 
 int main() {
     // Khởi tạo luồng giao tiếp với máy tính (USB Serial Monitor)
@@ -64,65 +167,27 @@ int main() {
     while (!stdio_usb_connected()) sleep_ms(100);
     sleep_ms(500);
 
-    printf("\n========== NEO-6M GPS TESTING SYSTEM ==========\n\n");
+    printf("\n========== TFT 2.8 inch (ILI9341) - HELLO TEST ==========\n\n");
 
-    neo6m_dev_t gps_dev;
-    neo6m_data_t gps_data;
-    
-    gps_data.is_valid = false;
-    gps_data.satellites = 0;
+    // ── Khai báo cấu trúc quản lý thiết bị ──
+    tft_dev_t tft_dev;
 
-    // Tiến hành kết nối UART phần cứng
-    printf("[INIT] Dang thiet lap ket noi UART cho Neo-6M...\n");
-    if (NEO6M_Init(&gps_dev, NEO6M_UART_PORT, NEO6M_PIN_TX, NEO6M_PIN_RX, NEO6M_BAUDRATE) != NEO6M_OK) {
-        printf("[FATAL] Khoi tao module GPS that bai! Dung chuong trinh.\n");
-        while (1) sleep_ms(1000);
+    // ── Gọi hàm khởi tạo từ driver ──
+    if (TFT_Init(&tft_dev, TFT_SPI_PORT) == TFT_OK) {
+        printf(">>> KET NOI OK! Man hinh TFT san sang hoat dong.\n");
+    } else {
+        printf(">>> LOI: Khoi tao man hinh TFT that bai!\n");
+        printf("    Vui long kiem tra lai day noi SPI (SDO/SDI/SCL/CS/RST/DC), cap nguon 3V3.\n");
+        while (1) sleep_ms(1000); // Dừng chương trình nếu lỗi khởi tạo
     }
-    
-    printf("[OK] Module da san sang. Dang quet tin hieu...\n");
-    printf("------------------------------------------------------------------------\n");
 
-    uint32_t message_count = 0;
+    // ── Xoá nền và in chữ "Hello" lên giữa màn hình ──
+    TFT_FillScreen(&tft_dev, TFT_COLOR_WHITE);
+    TFT_DrawString(&tft_dev, 40, 100, "Hello", TFT_COLOR_BLACK, TFT_COLOR_WHITE, 4);
+
+    printf(">>> Da in 'Hello' len man hinh.\n");
 
     while (1) {
-        // Liên tục kiểm tra luồng UART nhận câu lệnh NMEA mới
-        NEO6M_Status status = NEO6M_Update(&gps_dev, &gps_data);
-        
-        if (status == NEO6M_OK) {
-            message_count++;
-            
-            // Log chuỗi thô từ module phát ra
-            printf("[%lu] Raw NMEA: %s\n", message_count, gps_dev.nmea_buf);
-
-            // Xử lý hiển thị trực quan nếu module đã "Khóa vị trí" (Fix vệ tinh thành công)
-            if (gps_data.is_valid) {
-                // Tự động chuyển đổi từ khung giờ UTC sang giờ Việt Nam (GMT+7)
-                int local_hour = gps_data.hour + 7;
-                int local_day = gps_data.day;
-                int local_month = gps_data.month;
-                int local_year = gps_data.year;
-
-                if (local_hour >= 24) {
-                    local_hour -= 24;
-                    local_day += 1; 
-                }
-
-                printf("    >> [STATUS: FIX OK]\n");
-                printf("       + Thoi gian (VN): %02d:%02d:%02d  | Ngay: %02d/%02d/%04d\n", 
-                       local_hour, gps_data.minute, gps_data.second, local_day, local_month, local_year);
-                printf("       + Toa do         : Lat = %.6f, Lon = %.6f\n", 
-                       gps_data.latitude, gps_data.longitude);
-                printf("       + Thong so ve tinh: Bat duoc = %d ve tinh | Do chinh xac HDOP = %.2f\n", 
-                       gps_data.satellites, gps_data.hdop);
-                printf("       + Van toc & Cao do: Toc do = %.2f km/h | Do cao = %.1fm\n", 
-                       gps_data.speed_kmh, gps_data.altitude_m);
-            } else {
-                printf("    >> [STATUS: NO FIX] Dang quet tim ve tinh (Ve tinh bat duoc: %d)\n", gps_data.satellites);
-            }
-            printf("------------------------------------------------------------------------\n");
-        } else {
-            // Delay cực ngắn để giải phóng CPU khi UART rảnh hoặc gặp timeout tạm thời giữa các luồng truyền tải
-            sleep_us(100);
-        }
+        tight_loop_contents();
     }
 }
