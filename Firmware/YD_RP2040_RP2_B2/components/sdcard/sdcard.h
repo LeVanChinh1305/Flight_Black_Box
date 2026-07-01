@@ -42,6 +42,18 @@ extern "C" {
 #define SDCARD_CMD58   58  // READ_OCR
 #define SDCARD_ACMD41  41  // SD_SEND_OP_COND (gửi sau CMD55)
 
+// --------------------cấu hình vùng "file log" giả lập (vì chưa tích hợp FAT32/FatFs) -------------------
+// Đây KHÔNG phải file thật theo nghĩa hệ điều hành (Windows sẽ không thấy nó), mà là 1 vùng
+// block cố định trên thẻ được quản lý thủ công như 1 file ghi-tuần-tự (sequential log) đơn giản,
+// đủ để test ghi/đọc/xoá định kỳ mà không cần thư viện FAT ngoài.
+#define SDLOG_HEADER_BLOCK      20000              // block chứa header (magic + số bản ghi)
+#define SDLOG_DATA_START_BLOCK  (SDLOG_HEADER_BLOCK + 1) // block đầu tiên chứa dữ liệu
+#define SDLOG_DATA_BLOCK_COUNT  50                 // 50 block = 25600 byte vùng chứa dữ liệu
+#define SDLOG_RECORD_SIZE       32                 // mỗi bản ghi cố định 32 byte (chuỗi text, dư đệm '\0')
+#define SDLOG_RECORDS_PER_BLOCK (SDCARD_BLOCK_SIZE / SDLOG_RECORD_SIZE) // 16 bản ghi / block
+#define SDLOG_MAX_RECORDS       (SDLOG_DATA_BLOCK_COUNT * SDLOG_RECORDS_PER_BLOCK) // 800 bản ghi
+#define SDLOG_MAGIC              0xABCD1234u
+
 #define SDCARD_TOKEN_START_BLOCK   0xFE  // token bắt đầu 1 block dữ liệu (đọc/ghi đơn)
 #define SDCARD_TOKEN_DATA_ACCEPTED 0x05  // token phản hồi sau khi ghi 1 block thành công
 
@@ -81,6 +93,32 @@ SD_Status SDCARD_ReadBlock(sd_dev_t *dev, uint32_t block_addr, uint8_t *buf);
 
 // Ghi 1 block 512 byte tại địa chỉ block_addr
 SD_Status SDCARD_WriteBlock(sd_dev_t *dev, uint32_t block_addr, const uint8_t *buf);
+
+// --------------------API đọc dung lượng thẻ (qua thanh ghi CSD - CMD9)-------------------
+
+// Đọc tổng dung lượng VẬT LÝ của thẻ (đơn vị byte), tính từ thanh ghi CSD.
+// Đây là dung lượng THẬT của toàn bộ thẻ (không phụ thuộc filesystem).
+SD_Status SDCARD_GetCapacityBytes(sd_dev_t *dev, uint64_t *total_bytes);
+
+// --------------------API "file log" giả lập (ghi tuần tự, không cần FAT32)-------------------
+// Lưu ý: đây là vùng dữ liệu riêng do driver tự quản lý (không phải file .csv chuẩn hệ điều hành).
+// Phù hợp để test ghi/đọc/xoá định kỳ; nếu cần file .csv thật mở được trên PC, phải tích hợp FatFs.
+
+// Tạo (hoặc reset) file log: ghi header với số bản ghi = 0.
+SD_Status SDLOG_Create(sd_dev_t *dev);
+
+// Thêm 1 bản ghi text (tối đa 31 ký tự + '\0') vào cuối file log.
+// Trả về SD_ERROR nếu file đã đầy (SDLOG_MAX_RECORDS).
+SD_Status SDLOG_Append(sd_dev_t *dev, const char *text);
+
+// Đọc toàn bộ nội dung file log và in ra terminal (qua printf) theo thứ tự đã ghi.
+SD_Status SDLOG_PrintAll(sd_dev_t *dev);
+
+// Lấy số bản ghi hiện có trong file log (đọc từ header)
+SD_Status SDLOG_GetRecordCount(sd_dev_t *dev, uint32_t *count);
+
+// Xoá toàn bộ nội dung file log (reset số bản ghi về 0, tương đương "xoá file")
+SD_Status SDLOG_Delete(sd_dev_t *dev);
 
 #ifdef __cplusplus
 }

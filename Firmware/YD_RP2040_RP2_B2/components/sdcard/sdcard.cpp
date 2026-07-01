@@ -270,3 +270,202 @@ SD_Status SDCARD_WriteBlock(sd_dev_t *dev, uint32_t block_addr, const uint8_t *b
     SD_Transfer(dev, 0xFF);
     return SD_OK;
 }
+
+// =====================================================================================
+//  ĐỌC DUNG LƯỢNG THẺ (CMD9 - SEND_CSD)
+// =====================================================================================
+
+// Đọc 1 khối dữ liệu độ dài tuỳ ý (dùng chung cho CMD9-CSD/CMD10-CID, không chỉ 512 byte)
+// Giả định CS đã được Select trước đó và lệnh đã gửi xong, hàm này chỉ lo phần nhận data token.
+static SD_Status SD_ReceiveDataBlock(sd_dev_t *dev, uint8_t *buf, uint16_t len) {
+    uint8_t token = 0xFF;
+    uint32_t retry = 0;
+    while (token != SDCARD_TOKEN_START_BLOCK && retry < SD_READ_TOKEN_RETRY) {
+        token = SD_Transfer(dev, 0xFF);
+        retry++;
+    }
+    if (token != SDCARD_TOKEN_START_BLOCK) return SD_TIMEOUT;
+
+    for (uint16_t i = 0; i < len; i++) buf[i] = SD_Transfer(dev, 0xFF);
+    SD_Transfer(dev, 0xFF); // CRC byte cao
+    SD_Transfer(dev, 0xFF); // CRC byte thấp
+    return SD_OK;
+}
+
+SD_Status SDCARD_GetCapacityBytes(sd_dev_t *dev, uint64_t *total_bytes) {
+    if (dev == NULL || !dev->is_initialized || total_bytes == NULL) return SD_ERROR;
+
+    uint8_t r1 = SD_SendCommand(dev, SDCARD_CMD9, 0x00000000, 0x01);
+    if (r1 != 0x00) {
+        SD_CS_Deselect();
+        SD_Transfer(dev, 0xFF);
+        printf("[SDCARD] LOI: CMD9 (doc CSD) that bai. R1=0x%02X\n", r1);
+        return SD_ERROR;
+    }
+
+    uint8_t csd[16] = {0};
+    SD_Status st = SD_ReceiveDataBlock(dev, csd, 16);
+    SD_CS_Deselect();
+    SD_Transfer(dev, 0xFF);
+
+    if (st != SD_OK) {
+        printf("[SDCARD] LOI: Khong nhan duoc thanh ghi CSD (timeout).\n");
+        return st;
+    }
+
+    uint8_t csd_version = csd[0] >> 6; // bit [127:126]: 0 = CSD v1.0 (SDSC), 1 = CSD v2.0 (SDHC/SDXC)
+
+    if (csd_version == 1) {
+        // CSD v2.0 (SDHC/SDXC): C_SIZE là số nguyên 22 bit tại CSD[7][5:0]..CSD[9]
+        uint32_t c_size = ((uint32_t)(csd[7] & 0x3F) << 16) | ((uint32_t)csd[8] << 8) | csd[9];
+        *total_bytes = (uint64_t)(c_size + 1) * 512ULL * 1024ULL; // dung lượng = (C_SIZE+1) * 512KB
+    } else {
+        // CSD v1.0 (SDSC): công thức kinh điển dùng C_SIZE (12 bit) + C_SIZE_MULT (3 bit) + READ_BL_LEN (4 bit)
+        uint32_t c_size      = ((uint32_t)(csd[6] & 0x03) << 10) | ((uint32_t)csd[7] << 2) | (csd[8] >> 6);
+        uint32_t c_size_mult = ((uint32_t)(csd[9] & 0x03) << 1) | (csd[10] >> 7);
+        uint32_t read_bl_len = csd[5] & 0x0F;
+        *total_bytes = (uint64_t)(c_size + 1) * (1ULL << (c_size_mult + 2)) * (1ULL << read_bl_len);
+    }
+
+    return SD_OK;
+}
+
+// =====================================================================================
+//  "FILE LOG" GIẢ LẬP - GHI TUẦN TỰ TRÊN VÙNG BLOCK RIÊNG (KHÔNG CẦN FAT32)
+//  Cấu trúc:
+//   - Block header (SDLOG_HEADER_BLOCK): 4 byte magic + 4 byte record_count, còn lại bỏ trống.
+//   - Block dữ liệu (từ SDLOG_DATA_START_BLOCK): mỗi block chứa 16 bản ghi x 32 byte.
+//  Việc thêm 1 bản ghi luôn phải đọc nguyên block chứa nó, ghi đè đúng 32 byte rồi ghi lại
+//  cả block (vì SD chỉ hỗ trợ đọc/ghi theo đơn vị block 512 byte, không ghi được từng byte lẻ).
+// =====================================================================================
+
+static SD_Status SDLOG_ReadHeader(sd_dev_t *dev, uint32_t *magic_out, uint32_t *count_out) {
+    uint8_t hdr[SDCARD_BLOCK_SIZE];
+    SD_Status st = SDCARD_ReadBlock(dev, SDLOG_HEADER_BLOCK, hdr);
+    if (st != SD_OK) return st;
+
+    memcpy(magic_out, &hdr[0], sizeof(uint32_t));
+    memcpy(count_out, &hdr[4], sizeof(uint32_t));
+    return SD_OK;
+}
+
+static SD_Status SDLOG_WriteHeader(sd_dev_t *dev, uint32_t magic, uint32_t count) {
+    uint8_t hdr[SDCARD_BLOCK_SIZE];
+    memset(hdr, 0, SDCARD_BLOCK_SIZE);
+    memcpy(&hdr[0], &magic, sizeof(uint32_t));
+    memcpy(&hdr[4], &count, sizeof(uint32_t));
+    return SDCARD_WriteBlock(dev, SDLOG_HEADER_BLOCK, hdr);
+}
+
+SD_Status SDLOG_Create(sd_dev_t *dev) {
+    if (dev == NULL || !dev->is_initialized) return SD_ERROR;
+
+    SD_Status st = SDLOG_WriteHeader(dev, SDLOG_MAGIC, 0);
+    if (st == SD_OK) {
+        printf("[SDLOG] Da tao (reset) file log tai block %u, vung du lieu %u block (%u byte).\n",
+               (unsigned)SDLOG_HEADER_BLOCK, (unsigned)SDLOG_DATA_BLOCK_COUNT,
+               (unsigned)(SDLOG_DATA_BLOCK_COUNT * SDCARD_BLOCK_SIZE));
+    } else {
+        printf("[SDLOG] LOI: Khong the tao file log (ghi header that bai).\n");
+    }
+    return st;
+}
+
+SD_Status SDLOG_Append(sd_dev_t *dev, const char *text) {
+    if (dev == NULL || !dev->is_initialized || text == NULL) return SD_ERROR;
+
+    uint32_t magic = 0, count = 0;
+    if (SDLOG_ReadHeader(dev, &magic, &count) != SD_OK) return SD_ERROR;
+
+    if (magic != SDLOG_MAGIC) {
+        printf("[SDLOG] LOI: Chua co file log hop le (hay goi SDLOG_Create() truoc).\n");
+        return SD_ERROR;
+    }
+    if (count >= SDLOG_MAX_RECORDS) {
+        printf("[SDLOG] LOI: File log da day (%u/%u ban ghi).\n", (unsigned)count, (unsigned)SDLOG_MAX_RECORDS);
+        return SD_ERROR;
+    }
+
+    uint32_t block_index   = SDLOG_DATA_START_BLOCK + (count / SDLOG_RECORDS_PER_BLOCK);
+    uint32_t offset_inside = (count % SDLOG_RECORDS_PER_BLOCK) * SDLOG_RECORD_SIZE;
+
+    // Đọc nguyên block hiện tại (vì các bản ghi khác trong cùng block phải được giữ nguyên)
+    uint8_t block_buf[SDCARD_BLOCK_SIZE];
+    if (offset_inside == 0) {
+        // Bản ghi đầu tiên của block này -> chưa có dữ liệu cũ cần giữ, khởi tạo block trắng cho nhanh
+        memset(block_buf, 0, SDCARD_BLOCK_SIZE);
+    } else {
+        if (SDCARD_ReadBlock(dev, block_index, block_buf) != SD_OK) return SD_ERROR;
+    }
+
+    // Ghi đè đúng 32 byte của bản ghi mới (cắt bớt nếu chuỗi quá dài, đảm bảo có '\0' kết thúc)
+    char record[SDLOG_RECORD_SIZE];
+    memset(record, 0, SDLOG_RECORD_SIZE);
+    strncpy(record, text, SDLOG_RECORD_SIZE - 1);
+    memcpy(&block_buf[offset_inside], record, SDLOG_RECORD_SIZE);
+
+    if (SDCARD_WriteBlock(dev, block_index, block_buf) != SD_OK) return SD_ERROR;
+
+    // Cập nhật header (persist ngay để không mất dữ liệu nếu mất điện đột ngột)
+    return SDLOG_WriteHeader(dev, SDLOG_MAGIC, count + 1);
+}
+
+SD_Status SDLOG_GetRecordCount(sd_dev_t *dev, uint32_t *count) {
+    if (dev == NULL || !dev->is_initialized || count == NULL) return SD_ERROR;
+    uint32_t magic = 0;
+    SD_Status st = SDLOG_ReadHeader(dev, &magic, count);
+    if (st == SD_OK && magic != SDLOG_MAGIC) {
+        *count = 0;
+        return SD_ERROR; // chưa từng SDLOG_Create()
+    }
+    return st;
+}
+
+SD_Status SDLOG_PrintAll(sd_dev_t *dev) {
+    if (dev == NULL || !dev->is_initialized) return SD_ERROR;
+
+    uint32_t magic = 0, count = 0;
+    if (SDLOG_ReadHeader(dev, &magic, &count) != SD_OK) return SD_ERROR;
+    if (magic != SDLOG_MAGIC) {
+        printf("[SDLOG] Chua co file log hop le.\n");
+        return SD_ERROR;
+    }
+
+    printf("[SDLOG] ---- Noi dung file log (%u ban ghi) ----\n", (unsigned)count);
+    uint8_t block_buf[SDCARD_BLOCK_SIZE];
+    uint32_t last_block = 0xFFFFFFFF;
+
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t block_index   = SDLOG_DATA_START_BLOCK + (i / SDLOG_RECORDS_PER_BLOCK);
+        uint32_t offset_inside = (i % SDLOG_RECORDS_PER_BLOCK) * SDLOG_RECORD_SIZE;
+
+        if (block_index != last_block) {
+            if (SDCARD_ReadBlock(dev, block_index, block_buf) != SD_OK) {
+                printf("[SDLOG] LOI: Khong doc duoc block %u.\n", (unsigned)block_index);
+                return SD_ERROR;
+            }
+            last_block = block_index;
+        }
+
+        char record[SDLOG_RECORD_SIZE + 1];
+        memcpy(record, &block_buf[offset_inside], SDLOG_RECORD_SIZE);
+        record[SDLOG_RECORD_SIZE] = '\0'; // đảm bảo kết thúc chuỗi dù dữ liệu gốc không có '\0'
+        printf("  [%4u] %s\n", (unsigned)i, record);
+    }
+    printf("[SDLOG] ---- Het noi dung ----\n");
+    return SD_OK;
+}
+
+SD_Status SDLOG_Delete(sd_dev_t *dev) {
+    if (dev == NULL || !dev->is_initialized) return SD_ERROR;
+
+    // "Xoá file" ở đây = đưa số bản ghi về 0 (giống quick-format), dữ liệu vật lý cũ vẫn còn
+    // trên thẻ nhưng bị coi là không hợp lệ vì nằm ngoài record_count -> lần ghi sau sẽ đè lên.
+    SD_Status st = SDLOG_WriteHeader(dev, SDLOG_MAGIC, 0);
+    if (st == SD_OK) {
+        printf("[SDLOG] Da xoa file log (reset ve 0 ban ghi).\n");
+    } else {
+        printf("[SDLOG] LOI: Xoa file log that bai.\n");
+    }
+    return st;
+}

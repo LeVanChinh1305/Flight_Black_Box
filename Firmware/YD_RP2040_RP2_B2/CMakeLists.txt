@@ -61,6 +61,15 @@ add_executable(YD_RP2040_RP2_B2
     components/shared_data/shared_data.cpp
     components/font5x7/font5x7.cpp
     components/font5x7/font5x7.h
+    fatfs/diskio.c
+    fatfs/diskio.h
+    fatfs/ff.c
+    fatfs/ff.h
+    fatfs/ffconf.h
+    fatfs/ffsystem.c
+    fatfs/ffunicode.c
+
+
 )
 
 pico_set_program_name(YD_RP2040_RP2_B2 "YD_RP2040_RP2_B2")
@@ -77,6 +86,7 @@ target_link_libraries(YD_RP2040_RP2_B2
 # Add the standard include files to the build
 target_include_directories(YD_RP2040_RP2_B2 PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
+        ${CMAKE_CURRENT_LIST_DIR}/FatFs
 )
 
 # Add any user requested libraries

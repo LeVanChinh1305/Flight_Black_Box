@@ -330,17 +330,17 @@
 
 
 
-// =====================================================================================
-//  FLIGHT BLACK BOX - MAIN
-//  Hệ thống đọc cảm biến BMI160 (IMU) + NEO-6M (GPS), hiển thị trên TFT 240x320 (ILI9341)
-//  với 2 trang dữ liệu, chuyển trang bằng menu cảm ứng (XPT2046) ở đáy màn hình.
-//
-//  Nguyên tắc vẽ màn hình:
-//   - Khi vào 1 trang: vẽ NHÃN (label) + khung tĩnh đúng 1 lần duy nhất.
-//   - Mỗi vòng lặp: chỉ tính giá trị mới -> so sánh với giá trị cũ đã hiển thị
-//     -> NẾU khác mới xoá vùng nhỏ (FillRect) và vẽ lại (DrawString) giá trị đó.
-//     -> NẾU giống thì giữ nguyên, không vẽ lại (tránh nháy màn hình / tốn thời gian SPI).
-// =====================================================================================
+// // =====================================================================================
+// //  FLIGHT BLACK BOX - MAIN
+// //  Hệ thống đọc cảm biến BMI160 (IMU) + NEO-6M (GPS), hiển thị trên TFT 240x320 (ILI9341)
+// //  với 2 trang dữ liệu, chuyển trang bằng menu cảm ứng (XPT2046) ở đáy màn hình.
+
+// //  Nguyên tắc vẽ màn hình:
+// //   - Khi vào 1 trang: vẽ NHÃN (label) + khung tĩnh đúng 1 lần duy nhất.
+// //   - Mỗi vòng lặp: chỉ tính giá trị mới -> so sánh với giá trị cũ đã hiển thị
+// //     -> NẾU khác mới xoá vùng nhỏ (FillRect) và vẽ lại (DrawString) giá trị đó.
+// //     -> NẾU giống thì giữ nguyên, không vẽ lại (tránh nháy màn hình / tốn thời gian SPI).
+// // =====================================================================================
 
 // #include <stdio.h>
 // #include <string.h>
@@ -707,7 +707,7 @@
 
 //         sleep_us(200); // nhường CPU, không chiếm dụng toàn bộ vòng lặp
 //     }
-// },
+// }
 
 
 
@@ -734,12 +734,11 @@
 
 
 
-// =====================================================================================
-//  MAIN KIỂM TRA RIÊNG MODULE SD CARD (sdcard.h/.cpp)
-//  Mục đích: xác minh phần cứng + driver hoạt động đúng TRƯỚC khi tích hợp vào main chính.
-//  Cách dùng: tạm thời thay nội dung file src/main.cpp bằng file này, build & nạp,
-//  mở Serial Monitor (USB CDC) để xem kết quả. Sau khi test xong, khôi phục lại main.cpp gốc.
-// =====================================================================================
+=====================================================================================
+ MAIN TEST: DUNG LUONG THE + FILE LOG GIA LAP (GHI MOI GIAY -> DOC LAI -> XOA SAU 1 PHUT)
+ Cach dung: tam thoi thay noi dung src/main.cpp bang file nay, build & nap,
+ mo Serial Monitor de xem ket qua. Test xong nho khoi phuc lai main.cpp UI goc.
+=====================================================================================
 
 #include <stdio.h>
 #include <string.h>
@@ -748,112 +747,104 @@
 #include "components/xpt2046/xpt2046.h"   // bắt buộc init trước để cấu hình bus SPI0
 #include "components/sdcard/sdcard.h"
 
-// Dùng block số 10000 để test (đủ xa block 0/MBR, an toàn không phá dữ liệu sẵn có trên thẻ)
-#define TEST_BLOCK_ADDR   10000
-
 static xpt2046_dev_t g_touch;
 static sd_dev_t      g_sd;
 
-// In ra 16 byte đầu của buffer dạng HEX để dễ quan sát khi debug
-static void print_hex_preview(const uint8_t *buf, const char *label) {
-    printf("    %s (16 byte dau): ", label);
-    for (int i = 0; i < 16; i++) printf("%02X ", buf[i]);
-    printf("\n");
+// In dung lượng dạng dễ đọc (KB/MB/GB) thay vì số byte thô khó nhìn
+static void print_capacity_human(const char *label, uint64_t bytes) {
+    double mb = (double)bytes / (1024.0 * 1024.0);
+    if (mb >= 1024.0) {
+        printf("    %s: %.2f GB (%llu byte)\n", label, mb / 1024.0, (unsigned long long)bytes);
+    } else {
+        printf("    %s: %.2f MB (%llu byte)\n", label, mb, (unsigned long long)bytes);
+    }
 }
 
 int main() {
     stdio_init_all();
-    sleep_ms(3000); // chờ máy tính kịp mở cổng Serial trước khi in log (không bắt buộc, có thể bỏ)
+    sleep_ms(3000); // chờ máy tính kịp mở cổng Serial
 
     printf("\n========================================\n");
-    printf("   KIEM TRA MODULE THE NHO SD (SPI0)\n");
+    printf("  TEST: DUNG LUONG THE + FILE LOG SD\n");
     printf("========================================\n\n");
 
-    // ---------------- Bước 1: khởi tạo bus SPI0 thông qua XPT2046 ----------------
-    // (Vì SD card dùng chung bus SPI0 với cảm ứng, driver SD không tự cấu hình
-    //  GPIO_FUNC_SPI cho MISO/MOSI/SCK, nên bắt buộc phải gọi XPT2046_Init() trước)
-    printf("[1] Khoi tao bus SPI0 (qua XPT2046_Init)...\n");
+    // ---------------- Khởi tạo bus SPI0 + thẻ SD ----------------
+    printf("[INIT] Khoi tao bus SPI0 (qua XPT2046) + the SD...\n");
     if (XPT2046_Init(&g_touch, XPT2046_SPI_PORT) != XPT_OK) {
-        printf("    >>> LOI: Khong the khoi tao bus SPI0!\n");
+        printf("  >>> LOI: Khong khoi tao duoc bus SPI0!\n");
         while (1) sleep_ms(1000);
     }
-    printf("    OK.\n\n");
-
-    // ---------------- Bước 2: khởi tạo thẻ SD ----------------
-    printf("[2] Khoi tao the SD (CMD0 -> CMD8 -> ACMD41 -> CMD58)...\n");
-    SD_Status init_status = SDCARD_Init(&g_sd, SDCARD_SPI_PORT);
-    if (init_status != SD_OK) {
-        printf("    >>> THAT BAI! Ma loi = %d\n", init_status);
-        printf("    Kiem tra lai: day noi MISO/MOSI/SCK/CS, the co duoc cam chac khong,\n");
-        printf("    nguon 3.3V cho module SD co du dong khong.\n");
-        while (1) {
-            sleep_ms(2000);
-            printf("    [Dang doi...] Rut/cam lai the de thu lai (chua ho tro hot-plug tu dong).\n");
-        }
+    if (SDCARD_Init(&g_sd, SDCARD_SPI_PORT) != SD_OK) {
+        printf("  >>> LOI: Khong khoi tao duoc the SD!\n");
+        while (1) sleep_ms(1000);
     }
-    printf("    OK. Loai the: %s\n\n",
-           (g_sd.card_type == SD_TYPE_SDHC) ? "SDHC/SDXC" : "SDSC");
+    printf("  OK. Loai the: %s\n\n", (g_sd.card_type == SD_TYPE_SDHC) ? "SDHC/SDXC" : "SDSC");
 
-    // ---------------- Bước 3: kiểm tra phản hồi (CMD58 - đọc OCR) ----------------
-    printf("[3] Kiem tra ket noi (CMD58 - doc OCR)...\n");
-    if (SDCARD_CheckConnection(&g_sd) == SD_OK) {
-        printf("    OK. The van dang phan hoi binh thuong.\n\n");
+    // ---------------- Bước 1: đọc dung lượng thẻ (CSD) ----------------
+    printf("[1] Doc dung luong the (thanh ghi CSD)...\n");
+    uint64_t total_bytes = 0;
+    if (SDCARD_GetCapacityBytes(&g_sd, &total_bytes) == SD_OK) {
+        print_capacity_human("Tong dung luong vat ly cua the", total_bytes);
     } else {
-        printf("    >>> CANH BAO: The khong phan hoi CMD58!\n\n");
+        printf("    >>> LOI: Khong doc duoc dung luong the (CMD9 that bai).\n");
     }
 
-    // ---------------- Bước 4: test ghi + đọc lại 1 block, so sánh dữ liệu ----------------
-    printf("[4] Test ghi/doc block #%d (512 byte)...\n", TEST_BLOCK_ADDR);
+    // LƯU Ý QUAN TRỌNG: vì driver này thao tác BLOCK THÔ (chưa có FAT32/FatFs), nên không thể
+    // biết "đã dùng/còn trống" của TOÀN THẺ theo đúng nghĩa hệ điều hành (điều đó đòi hỏi đọc
+    // bảng FAT thật). Ở đây mình chỉ báo cáo mức SỬ DỤNG TRONG VÙNG FILE LOG do driver tự quản lý
+    // (xem bước 2) như một con số tham khảo, KHÔNG đại diện cho toàn bộ thẻ.
+    uint64_t sdlog_region_bytes = (uint64_t)SDLOG_DATA_BLOCK_COUNT * SDCARD_BLOCK_SIZE;
+    print_capacity_human("Vung file log rieng (driver tu quan ly)", sdlog_region_bytes);
+    printf("\n");
 
-    uint8_t write_buf[SDCARD_BLOCK_SIZE];
-    uint8_t read_buf[SDCARD_BLOCK_SIZE];
-
-    // Tạo mẫu dữ liệu test dễ nhận biết: byte thứ i = (i % 256), khác hẳn dữ liệu rác mặc định
-    for (int i = 0; i < SDCARD_BLOCK_SIZE; i++) write_buf[i] = (uint8_t)(i & 0xFF);
-
-    printf("    -> Dang ghi...\n");
-    SD_Status write_status = SDCARD_WriteBlock(&g_sd, TEST_BLOCK_ADDR, write_buf);
-    if (write_status != SD_OK) {
-        printf("    >>> LOI GHI! Ma loi = %d\n", write_status);
-    } else {
-        printf("    Ghi thanh cong.\n");
+    // ---------------- Bước 2: tạo (reset) file log ----------------
+    printf("[2] Tao file log (vung block rieng, ghi tuan tu)...\n");
+    if (SDLOG_Create(&g_sd) != SD_OK) {
+        printf("    >>> LOI: Khong tao duoc file log, dung chuong trinh.\n");
+        while (1) sleep_ms(1000);
     }
+    printf("\n");
 
-    memset(read_buf, 0, SDCARD_BLOCK_SIZE); // xoá sạch buffer đọc để chắc chắn không "ăn gian" kết quả
-    printf("    -> Dang doc lai...\n");
-    SD_Status read_status = SDCARD_ReadBlock(&g_sd, TEST_BLOCK_ADDR, read_buf);
-    if (read_status != SD_OK) {
-        printf("    >>> LOI DOC! Ma loi = %d\n", read_status);
-    } else {
-        printf("    Doc thanh cong.\n");
+    // ---------------- Bước 3: ghi 1 tín hiệu mỗi giây trong 60 giây ----------------
+    printf("[3] Ghi tin hieu don gian moi giay, lien tuc trong 60 giay...\n\n");
+    const int LOG_DURATION_SEC = 60;
+    for (int sec = 1; sec <= LOG_DURATION_SEC; sec++) {
+        sleep_ms(1000);
+
+        uint32_t t_ms = to_ms_since_boot(get_absolute_time());
+        char line[SDLOG_RECORD_SIZE];
+        // Tín hiệu test đơn giản: "SIG,<so_thu_tu>,<thoi_gian_ms>"
+        snprintf(line, sizeof(line), "SIG,%d,%lu", sec, (unsigned long)t_ms);
+
+        SD_Status st = SDLOG_Append(&g_sd, line);
+        printf("  [%2d/%d] Ghi: \"%s\" -> %s\n",
+               sec, LOG_DURATION_SEC, line, (st == SD_OK) ? "OK" : "LOI");
     }
+    printf("\n");
 
-    print_hex_preview(write_buf, "Da ghi  ");
-    print_hex_preview(read_buf,  "Da doc  ");
+    // ---------------- Bước 4: đọc lại toàn bộ nội dung file log, in ra terminal ----------------
+    printf("[4] Doc lai toan bo noi dung file log...\n\n");
+    uint32_t record_count = 0;
+    SDLOG_GetRecordCount(&g_sd, &record_count);
+    printf("  Tong so ban ghi hien co: %u\n", (unsigned)record_count);
+    SDLOG_PrintAll(&g_sd);
+    printf("\n");
 
-    bool data_match = (write_status == SD_OK && read_status == SD_OK &&
-                        memcmp(write_buf, read_buf, SDCARD_BLOCK_SIZE) == 0);
+    // ---------------- Bước 5: xoá dữ liệu file log ----------------
+    printf("[5] Xoa du lieu file log...\n");
+    SDLOG_Delete(&g_sd);
+
+    // Xác nhận lại: đọc số bản ghi sau khi xoá, in lại nội dung (phải rỗng)
+    SDLOG_GetRecordCount(&g_sd, &record_count);
+    printf("  Sau khi xoa, so ban ghi con lai: %u\n", (unsigned)record_count);
+    SDLOG_PrintAll(&g_sd);
 
     printf("\n========================================\n");
-    if (data_match) {
-        printf("   KET QUA: THE SD HOAT DONG TOT!\n");
-        printf("   (Du lieu ghi va doc lai khop nhau 100%%)\n");
-    } else {
-        printf("   KET QUA: THE SD CO VAN DE!\n");
-        printf("   (Du lieu khong khop hoac thao tac that bai)\n");
-    }
+    printf("   HOAN TAT TOAN BO QUY TRINH TEST!\n");
     printf("========================================\n\n");
 
-    // ---------------- Bước 5: lặp lại kiểm tra định kỳ để theo dõi độ ổn định ----------------
-    printf("Bat dau vong lap kiem tra dinh ky moi 5 giay (CMD58)...\n");
-    printf("Quan sat: neu the bi long/mat ket noi giua chung, dong nay se bao loi ngay.\n\n");
-
-    uint32_t round = 0;
     while (1) {
-        sleep_ms(5000);
-        round++;
-        SD_Status check = SDCARD_CheckConnection(&g_sd);
-        printf("[Vong %lu] CheckConnection: %s\n",
-               round, (check == SD_OK) ? "OK" : "MAT KET NOI / LOI");
+        sleep_ms(2000);
+        printf("[IDLE] Da hoan tat, dang cho... (cat nguon hoac nap lai firmware khac)\n");
     }
 }
