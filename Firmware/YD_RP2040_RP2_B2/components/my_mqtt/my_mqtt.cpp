@@ -1,0 +1,197 @@
+#include "my_mqtt.h"
+#include "components/sim7680/sim7680.h"
+#include <stdio.h>
+#include <string.h>
+#include "pico/stdlib.h"
+
+static bool mqtt_started = false;
+static bool mqtt_connected = false;
+
+void __attribute__((weak)) mqtt_message_received(const char* topic, const char* payload) {
+    printf("[MQTT] Received [%s]: %s\n", topic, payload);
+}
+
+static bool send_at_cmd(const char* cmd, uint32_t timeout_ms) {
+    char resp[128];
+    bool ok = sim7680_send_cmd(cmd, resp, sizeof(resp), timeout_ms);
+    printf("[MQTT] CMD: %s -> %s\n", cmd, ok ? "OK" : "FAIL");
+    return ok;
+}
+static bool send_with_prompt(const char* cmd, const char* data, uint32_t timeout_ms) {
+    // TỐI ƯU: Chỉ xả sạch bộ đệm RX NGAY TRƯỚC KHI gửi lệnh cấu hình 
+    // để chắc chắn ký tự đầu tiên nhận được sau đó là phản hồi của chính lệnh này.
+    while (uart_is_readable(SIM7680_UART)) {
+        (void)uart_getc(SIM7680_UART);
+    }
+
+    // Gửi lệnh AT chính (ví dụ: AT+CMQTTTOPIC=0,25)
+    uart_puts(SIM7680_UART, cmd);
+    uart_puts(SIM7680_UART, "\r\n");
+
+    // Chờ prompt '>' từ module SIM
+    absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
+    bool found_prompt = false;
+    
+    while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        if (uart_is_readable(SIM7680_UART)) {
+            char c = uart_getc(SIM7680_UART);
+            if (c == '>') {
+                found_prompt = true;
+                break;
+            }
+        }
+        sleep_ms(1);
+    }
+
+    if (!found_prompt) {
+        printf("[MQTT] Không nhận được ký tự '>' prompt cho lệnh: %s\n", cmd);
+        return false;
+    }
+
+    // Gửi dữ liệu nội dung thô + Ký tự kết thúc Ctrl+Z (0x1A)
+    uart_puts(SIM7680_UART, data);
+    uart_putc(SIM7680_UART, 0x1A);
+
+    // Đọc phản hồi OK sau khi truyền data
+    char resp[128];
+    size_t idx = 0;
+    deadline = make_timeout_time_ms(timeout_ms);
+    
+    while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        if (uart_is_readable(SIM7680_UART)) {
+            char c = uart_getc(SIM7680_UART);
+            if (idx < sizeof(resp) - 1) {
+                resp[idx++] = c;
+            }
+        }
+        sleep_ms(1);
+    }
+    resp[idx] = '\0';
+
+    return (strstr(resp, "OK") != NULL);
+}
+
+
+static void setup_pdp_context(void) {
+    printf("[NET] Cấu hình PDP...\n");
+    send_at_cmd("AT+CGDCONT=1,\"IP\",\"viettel\"", 3000);
+    send_at_cmd("AT+CGACT=1,1", 5000);
+    send_at_cmd("AT+CGPADDR=1", 3000);
+}
+
+bool mqtt_init(void) {
+    if (mqtt_started) return true;
+
+    printf("[MQTT] Starting MQTT service...\n");
+
+    printf("[NET] Khởi động sạch (Clean Boot) stack mạng...\n");
+    send_at_cmd("AT+CFUN=0", 3000);
+    sleep_ms(2000);
+    send_at_cmd("AT+CFUN=1", 5000);
+    sleep_ms(3000);
+
+    setup_pdp_context();
+
+    char test_resp[128];
+    bool supports_mqtt = sim7680_send_cmd("AT+CMQTTSTART=?", test_resp, sizeof(test_resp), 2000);
+    if (!supports_mqtt) return false;
+
+    send_at_cmd("AT+CMQTTDISC=0,120", 2000);
+    send_at_cmd("AT+CMQTTREL=0", 2000);
+    send_at_cmd("AT+CMQTTSTOP", 2000);
+
+    if (send_at_cmd("AT+CMQTTSTART", 5000)) {
+        mqtt_started = true;
+        return true;
+    }
+    return false;
+}
+
+bool mqtt_connect(void) {
+    if (!mqtt_started && !mqtt_init()) return false;
+
+    char cmd[120];
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", MQTT_CLIENT_ID);
+    if (!send_at_cmd(cmd, 3000)) return false;
+
+    snprintf(cmd, sizeof(cmd), "AT+CMQTTCONNECT=0,\"tcp://%s:%d\",%d,1", 
+             MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE);
+    
+    if (send_at_cmd(cmd, 15000)) {
+        mqtt_connected = true;
+        printf("[MQTT] Connected successfully to HiveMQ!\n");
+        return true;
+    }
+    return false;
+}
+
+bool mqtt_publish(const char* topic, const char* payload, bool retain) {
+    if (!mqtt_connected) return false;
+
+    int topic_len = strlen(topic);
+    int payload_len = strlen(payload);
+
+    char cmd_topic[64];
+    snprintf(cmd_topic, sizeof(cmd_topic), "AT+CMQTTTOPIC=0,%d", topic_len);
+    if (!send_with_prompt(cmd_topic, topic, 4000)) return false;
+
+    char cmd_payload[64];
+    snprintf(cmd_payload, sizeof(cmd_payload), "AT+CMQTTPAYLOAD=0,%d", payload_len);
+    if (!send_with_prompt(cmd_payload, payload, 4000)) return false;
+
+    char pub_cmd[64];
+    snprintf(pub_cmd, sizeof(pub_cmd), "AT+CMQTTPUB=0,%d,%d,%d", MQTT_QOS, MQTT_KEEPALIVE, retain ? 1 : 0);
+    return send_at_cmd(pub_cmd, 10000);
+}
+
+bool mqtt_subscribe(const char* topic) {
+    if (!mqtt_connected) return false;
+    printf("[MQTT] Subscribing to %s ...\n", topic);
+
+    int topic_len = strlen(topic);
+    char cmd_sub[64];
+    snprintf(cmd_sub, sizeof(cmd_sub), "AT+CMQTTSUBTOPIC=0,%d,%d", topic_len, MQTT_QOS);
+    if (!send_with_prompt(cmd_sub, topic, 4000)) return false;
+
+    return send_at_cmd("AT+CMQTTSUB=0", 5000);
+}
+
+
+bool mqtt_process(void) {
+    static char process_buf[512];
+    static size_t p_idx = 0;
+
+    while (uart_is_readable(SIM7680_UART)) {
+        char c = uart_getc(SIM7680_UART);
+
+        if (p_idx < sizeof(process_buf) - 1) {
+            process_buf[p_idx++] = c;
+            process_buf[p_idx] = '\0';
+        }
+
+        // Kiểm tra xem có nhận được URC báo có tin nhắn hay không
+        if (strstr(process_buf, "+CMRECV:") != NULL && c == '\n') {
+            printf("\n-----------------------------------------\n");
+            printf("[KẾT QUẢ] NHẬN ĐƯỢC LỆNH TỪ BROKER:\n%s", process_buf);
+            printf("-----------------------------------------\n\n");
+            
+            mqtt_message_received(MQTT_TOPIC_COMMAND, process_buf);
+
+            p_idx = 0;
+            process_buf[0] = '\0';
+            return true;
+        }
+
+        // Tối ưu giải phóng bộ đệm nếu nhận được dòng phản hồi OK/FAIL thông thường từ các lệnh khác
+        if (c == '\n') {
+            if (strstr(process_buf, "+CMRECV:") == NULL) {
+                p_idx = 0;
+                process_buf[0] = '\0';
+            }
+        }
+    }
+    return true;
+}
+
+bool mqtt_disconnect(void) { return true; }
+bool mqtt_unsubscribe(const char* topic) { return true; }

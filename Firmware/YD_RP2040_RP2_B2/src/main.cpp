@@ -1072,85 +1072,189 @@
 
 
 
+// #include <stdio.h>
+// #include "pico/stdlib.h"
+// #include "components/sim7680/sim7680.h"
+
+// int main(void)
+// {
+//     // In log ra USB/UART0 mặc định (stdio) để theo dõi qua Serial Monitor
+//     stdio_init_all();
+//     sleep_ms(3000); // chờ mở cổng serial để không mất log đầu
+
+//     printf("=== SIM7680 driver test ===\n");
+
+//     sim7680_init();
+
+//     printf("Dang doi module SIM khoi dong...\n");
+//     if (!sim7680_wait_ready(15000)) {
+//         printf("[LOI] Khong nhan duoc phan hoi AT tu module SIM!\n");
+//         printf("-> Kiem tra lai day noi: SIM_TX->GPIO5, SIM_RX->GPIO4, GND chung, nguon cap du dong.\n");
+//     } else {
+//         printf("[OK] Module SIM da san sang.\n");
+//     }
+
+//     while (true) {
+//         printf("\n--- Kiem tra module ---\n");
+
+//         if (sim7680_test()) {
+//             printf("AT test        : OK\n");
+//         } else {
+//             printf("AT test        : FAIL (khong phan hoi)\n");
+//         }
+
+//         char model[200];
+//         if (sim7680_get_model(model, sizeof(model))) {
+//             printf("Model          : %s\n", model);
+//         } else {
+//             printf("Model          : khong doc duoc\n");
+//         }
+
+//         char imei[32];
+//         if (sim7680_get_imei(imei, sizeof(imei))) {
+//             printf("IMEI           : %s\n", imei);
+//         } else {
+//             printf("IMEI           : khong doc duoc\n");
+//         }
+
+//         int rssi, ber;
+//         if (sim7680_get_signal_quality(&rssi, &ber)) {
+//             printf("Tin hieu (CSQ) : rssi=%d ber=%d\n", rssi, ber);
+//         } else {
+//             printf("Tin hieu (CSQ) : khong doc duoc\n");
+//         }
+
+//         int net_status;
+//         if (sim7680_get_network_status(&net_status)) {
+//             printf("Trang thai mang: %d (0=chua dang ky,1=da dang ky home,5=roaming)\n", net_status);
+//         } else {
+//             printf("Trang thai mang: khong doc duoc\n");
+//         }
+
+//         bool sim_ready;
+//         if (sim7680_check_sim(&sim_ready)) {
+//             printf("SIM             : %s\n", sim_ready ? "READY" : "KHONG NHAN DIEN DUOC");
+//         } else {
+//             printf("SIM             : khong doc duoc (module co the chua san sang)\n");
+//         }
+
+//         int cfun;
+//         if (sim7680_get_radio_function(&cfun)) {
+//             printf("Radio (CFUN)    : %d (0=tat song,1=bat day du,4=che do bay)\n", cfun);
+//         } else {
+//             printf("Radio (CFUN)    : khong doc duoc\n");
+//         }
+
+//         if (rssi == 99) {
+//             printf(">> Goi y: rssi=99 nghia la khong do duoc tin hieu. Kiem tra: anten da cam chua,\n");
+//             printf(">>        cam dung cong (chan MAIN), anten khong bi hong day.\n");
+//         }
+
+//         sleep_ms(5000);
+//     }
+
+//     return 0;
+// }
+
+
+
+
+
+//--------------------------------------test mqtt connection ---------------------------------------
+
+
+
+
+
+
+
+
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "components/sim7680/sim7680.h"
+#include "components/my_mqtt/my_mqtt.h"
 
-int main(void)
-{
-    // In log ra USB/UART0 mặc định (stdio) để theo dõi qua Serial Monitor
+int main() {
+    // Khởi tạo toàn bộ cấu trúc Standard I/O (UART/USB Serial) để debug
     stdio_init_all();
-    sleep_ms(3000); // chờ mở cổng serial để không mất log đầu
+    
+    // Chờ cho đến khi cổng USB Serial được mở trên máy tính (Terminal/Serial Monitor)
+    while (!stdio_usb_connected()) {
+        sleep_ms(100);
+    }
+    sleep_ms(1000);
 
-    printf("=== SIM7680 driver test ===\n");
+    printf("\n=== FLIGHT BLACK BOX - MQTT TEST ===\n\n");
 
+    // Khởi tạo phần cứng UART giao tiếp giữa RP2040 và SIM7680
+    printf("Đang chờ module SIM khởi động...\n");
     sim7680_init();
 
-    printf("Dang doi module SIM khoi dong...\n");
+    // Chờ module SIM phản hồi lệnh AT cơ bản
     if (!sim7680_wait_ready(15000)) {
-        printf("[LOI] Khong nhan duoc phan hoi AT tu module SIM!\n");
-        printf("-> Kiem tra lai day noi: SIM_TX->GPIO5, SIM_RX->GPIO4, GND chung, nguon cap du dong.\n");
-    } else {
-        printf("[OK] Module SIM da san sang.\n");
+        printf("[LOI] Module SIM không phản hồi lệnh AT!\n");
+        while(1) sleep_ms(1000);
     }
 
-    while (true) {
-        printf("\n--- Kiem tra module ---\n");
+    // Kiểm tra và chờ đăng ký mạng di động (Thành công khi net_status là 1 hoặc 5)
+    printf("Đang chờ đăng ký mạng...\n");
+    int net_status = 0;
+    uint32_t timeout = 30000;
+    absolute_time_t deadline = make_timeout_time_ms(timeout);
 
-        if (sim7680_test()) {
-            printf("AT test        : OK\n");
-        } else {
-            printf("AT test        : FAIL (khong phan hoi)\n");
+    while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        sim7680_get_network_status(&net_status);
+        if (net_status == 1 || net_status == 5) {
+            printf("[OK] Đã đăng ký mạng!\n");
+            break;
         }
+        sleep_ms(2000);
+    }
 
-        char model[200];
-        if (sim7680_get_model(model, sizeof(model))) {
-            printf("Model          : %s\n", model);
-        } else {
-            printf("Model          : khong doc duoc\n");
+    if (net_status != 1 && net_status != 5) {
+        printf("[LOI] Không đăng ký được mạng!\n");
+        while(1) sleep_ms(1000);
+    }
+
+    // ====================== CẤU HÌNH & KẾT NỐI MQTT ======================
+    printf("[MQTT] Khởi tạo...\n");
+    
+    if (mqtt_init() && mqtt_connect()) {
+        // GIẢI PHÁP CHÍ MẠNG: Nghỉ 2 giây để dòng lệnh đồng bộ và stack mạng của SIM ổn định kết nối
+        printf("[MQTT] Chờ stack mạng ổn định trước khi Subscribe...\n");
+        sleep_ms(2000);
+
+        // Tiến hành đăng ký Topic nhận lệnh điều khiển từ Server
+        mqtt_subscribe(MQTT_TOPIC_COMMAND);
+
+        int counter = 0;
+        while (true) {
+            // Liên tục gọi hàm process để kiểm tra dữ liệu URC (tin nhắn đến từ broker)
+            mqtt_process();
+
+            // Đóng gói chuỗi JSON Telemetry của Hộp đen hành trình
+            char payload[128];
+            snprintf(payload, sizeof(payload),
+                     "{\"device\":\"blackbox\",\"counter\":%d,\"status\":\"online\"}", 
+                     counter++);
+
+            // Tiến hành Publish dữ liệu hành trình
+            if (mqtt_publish(MQTT_TOPIC_TELEMETRY, payload, false)) {
+                printf("[OK] Published: %s\n", payload);
+            } else {
+                printf("[FAIL] Publish failed\n");
+            }
+
+            // Giải pháp tránh block: Thay vì dùng sleep_ms(5000) gây chết luồng đọc UART,
+            // ta chia nhỏ thời gian delay ra làm nhiều chu kỳ ngắn và chèn mqtt_process() vào giữa
+            for (int i = 0; i < 50; i++) {
+                mqtt_process(); // Quét cổng UART liên tục để tóm bản tin từ Server gửi xuống
+                sleep_ms(100);  // 50 lần * 100ms = 5 giây giãn cách giữa các lần Publish
+            }
         }
-
-        char imei[32];
-        if (sim7680_get_imei(imei, sizeof(imei))) {
-            printf("IMEI           : %s\n", imei);
-        } else {
-            printf("IMEI           : khong doc duoc\n");
-        }
-
-        int rssi, ber;
-        if (sim7680_get_signal_quality(&rssi, &ber)) {
-            printf("Tin hieu (CSQ) : rssi=%d ber=%d\n", rssi, ber);
-        } else {
-            printf("Tin hieu (CSQ) : khong doc duoc\n");
-        }
-
-        int net_status;
-        if (sim7680_get_network_status(&net_status)) {
-            printf("Trang thai mang: %d (0=chua dang ky,1=da dang ky home,5=roaming)\n", net_status);
-        } else {
-            printf("Trang thai mang: khong doc duoc\n");
-        }
-
-        bool sim_ready;
-        if (sim7680_check_sim(&sim_ready)) {
-            printf("SIM             : %s\n", sim_ready ? "READY" : "KHONG NHAN DIEN DUOC");
-        } else {
-            printf("SIM             : khong doc duoc (module co the chua san sang)\n");
-        }
-
-        int cfun;
-        if (sim7680_get_radio_function(&cfun)) {
-            printf("Radio (CFUN)    : %d (0=tat song,1=bat day du,4=che do bay)\n", cfun);
-        } else {
-            printf("Radio (CFUN)    : khong doc duoc\n");
-        }
-
-        if (rssi == 99) {
-            printf(">> Goi y: rssi=99 nghia la khong do duoc tin hieu. Kiem tra: anten da cam chua,\n");
-            printf(">>        cam dung cong (chan MAIN), anten khong bi hong day.\n");
-        }
-
-        sleep_ms(5000);
+    } else {
+        printf("[LOI] Không kết nối được MQTT Broker!\n");
+        while(1) sleep_ms(1000);
     }
 
     return 0;

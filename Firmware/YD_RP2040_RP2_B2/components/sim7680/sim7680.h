@@ -46,4 +46,6 @@ bool sim7680_check_sim(bool *ready);
 // Kiểm tra trạng thái chức năng vô tuyến (AT+CFUN?). 0=tat song,1=bat day du,4=che do bay
 bool sim7680_get_radio_function(int *cfun);
 
+
+
 #endif // SIM7680_H

@@ -179,3 +179,5 @@ bool sim7680_get_radio_function(int *cfun)
     }
     return sscanf(p, "+CFUN: %d", cfun) == 1;
 }
+
+
