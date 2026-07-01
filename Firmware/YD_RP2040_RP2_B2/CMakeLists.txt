@@ -39,8 +39,8 @@ add_executable(YD_RP2040_RP2_B2
     src/main.cpp
     components/my_mqtt/my_mqtt.cpp
     components/my_mqtt/my_mqtt.h
-    components/simA7680C/simA7680C.cpp
-    components/simA7680C/simA7680C.h
+    components/sim7680/sim7680.cpp
+    components/sim7680/sim7680.h
     components/bmi160/bmi160.h
     components/bmi160/bm1160.cpp
     components/buzzer/buzzer.h

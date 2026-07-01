@@ -1058,3 +1058,100 @@
 
 
 //------------------------------------test module sim ---------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "components/sim7680/sim7680.h"
+
+int main(void)
+{
+    // In log ra USB/UART0 mặc định (stdio) để theo dõi qua Serial Monitor
+    stdio_init_all();
+    sleep_ms(3000); // chờ mở cổng serial để không mất log đầu
+
+    printf("=== SIM7680 driver test ===\n");
+
+    sim7680_init();
+
+    printf("Dang doi module SIM khoi dong...\n");
+    if (!sim7680_wait_ready(15000)) {
+        printf("[LOI] Khong nhan duoc phan hoi AT tu module SIM!\n");
+        printf("-> Kiem tra lai day noi: SIM_TX->GPIO5, SIM_RX->GPIO4, GND chung, nguon cap du dong.\n");
+    } else {
+        printf("[OK] Module SIM da san sang.\n");
+    }
+
+    while (true) {
+        printf("\n--- Kiem tra module ---\n");
+
+        if (sim7680_test()) {
+            printf("AT test        : OK\n");
+        } else {
+            printf("AT test        : FAIL (khong phan hoi)\n");
+        }
+
+        char model[200];
+        if (sim7680_get_model(model, sizeof(model))) {
+            printf("Model          : %s\n", model);
+        } else {
+            printf("Model          : khong doc duoc\n");
+        }
+
+        char imei[32];
+        if (sim7680_get_imei(imei, sizeof(imei))) {
+            printf("IMEI           : %s\n", imei);
+        } else {
+            printf("IMEI           : khong doc duoc\n");
+        }
+
+        int rssi, ber;
+        if (sim7680_get_signal_quality(&rssi, &ber)) {
+            printf("Tin hieu (CSQ) : rssi=%d ber=%d\n", rssi, ber);
+        } else {
+            printf("Tin hieu (CSQ) : khong doc duoc\n");
+        }
+
+        int net_status;
+        if (sim7680_get_network_status(&net_status)) {
+            printf("Trang thai mang: %d (0=chua dang ky,1=da dang ky home,5=roaming)\n", net_status);
+        } else {
+            printf("Trang thai mang: khong doc duoc\n");
+        }
+
+        bool sim_ready;
+        if (sim7680_check_sim(&sim_ready)) {
+            printf("SIM             : %s\n", sim_ready ? "READY" : "KHONG NHAN DIEN DUOC");
+        } else {
+            printf("SIM             : khong doc duoc (module co the chua san sang)\n");
+        }
+
+        int cfun;
+        if (sim7680_get_radio_function(&cfun)) {
+            printf("Radio (CFUN)    : %d (0=tat song,1=bat day du,4=che do bay)\n", cfun);
+        } else {
+            printf("Radio (CFUN)    : khong doc duoc\n");
+        }
+
+        if (rssi == 99) {
+            printf(">> Goi y: rssi=99 nghia la khong do duoc tin hieu. Kiem tra: anten da cam chua,\n");
+            printf(">>        cam dung cong (chan MAIN), anten khong bi hong day.\n");
+        }
+
+        sleep_ms(5000);
+    }
+
+    return 0;
+}
