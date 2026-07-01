@@ -1,233 +1,119 @@
 /*-----------------------------------------------------------------------*/
-/* Low level disk I/O module SKELETON for FatFs     (C)ChaN, 2025        */
+/* diskio.c – FatFs glue layer cho driver SD card (components/sdcard)    */
+/* Kết nối 5 hàm FatFs yêu cầu với SDCARD_Init/ReadBlock/WriteBlock...  */
 /*-----------------------------------------------------------------------*/
-/* If a working storage control module is available, it should be        */
-/* attached to the FatFs via a glue function rather than modifying it.   */
-/* This is an example of glue functions to attach various exsisting      */
-/* storage control modules to the FatFs module with a defined API.       */
-/*-----------------------------------------------------------------------*/
+#include "fatfs/ff.h"
+#include "fatfs/diskio.h"
+#include "components/sdcard/sdcard.h"
+#include "hardware/gpio.h"
+#include <stdio.h>
 
-#include "ff.h"			/* Basic definitions of FatFs */
-#include "diskio.h"		/* Declarations FatFs MAI */
-
-/* Example: Declarations of the platform and disk functions in the project */
-#include "platform.h"
-#include "storage.h"
-
-/* Example: Mapping of physical drive number for each drive */
-#define DEV_FLASH	0	/* Map FTL to physical drive 0 */
-#define DEV_MMC		1	/* Map MMC/SD card to physical drive 1 */
-#define DEV_USB		2	/* Map USB MSD to physical drive 2 */
-
+/* Chỉ dùng 1 ổ đĩa vật lý duy nhất (pdrv = 0 = thẻ SD) */
+static sd_dev_t s_sd;
+static bool     s_ready = false;
 
 /*-----------------------------------------------------------------------*/
-/* Get Drive Status                                                      */
+/* Khởi tạo ổ đĩa – FatFs gọi hàm này 1 lần trước khi mount            */
 /*-----------------------------------------------------------------------*/
-
-DSTATUS disk_status (
-	BYTE pdrv		/* Physical drive nmuber to identify the drive */
-)
+DSTATUS disk_initialize(BYTE pdrv)
 {
-	DSTATUS stat;
-	int result;
+    if (pdrv != 0) return STA_NOINIT;
 
-	switch (pdrv) {
-	case DEV_RAM :
-		result = RAM_disk_status();
+    /* Cấu hình GPIO_FUNC_SPI cho bus SPI0 (dùng chung với XPT2046).
+       Gọi spi_init() ở đây để đảm bảo bus ở trạng thái đúng ngay cả khi
+       XPT2046_Init() chưa được gọi trước đó (an toàn khi gọi nhiều lần). */
+    gpio_set_function(SDCARD_PIN_MISO, GPIO_FUNC_SPI);
+    gpio_set_function(SDCARD_PIN_MOSI, GPIO_FUNC_SPI);
+    gpio_set_function(SDCARD_PIN_SCK,  GPIO_FUNC_SPI);
+    spi_init(SDCARD_SPI_PORT, SDCARD_BAUD_INIT);
 
-		// translate the reslut code here
+    SD_Status st = SDCARD_Init(&s_sd, SDCARD_SPI_PORT);
+    s_ready = (st == SD_OK);
 
-		return stat;
-
-	case DEV_MMC :
-		result = MMC_disk_status();
-
-		// translate the reslut code here
-
-		return stat;
-
-	case DEV_USB :
-		result = USB_disk_status();
-
-		// translate the reslut code here
-
-		return stat;
-	}
-	return STA_NOINIT;
+    if (!s_ready) {
+        printf("[diskio] LOI: SDCARD_Init that bai (ma=%d)\n", st);
+    }
+    return s_ready ? 0 : STA_NOINIT;
 }
 
-
-
 /*-----------------------------------------------------------------------*/
-/* Inidialize a Drive                                                    */
+/* Trả về trạng thái ổ đĩa                                              */
 /*-----------------------------------------------------------------------*/
-
-DSTATUS disk_initialize (
-	BYTE pdrv				/* Physical drive nmuber to identify the drive */
-)
+DSTATUS disk_status(BYTE pdrv)
 {
-	DSTATUS stat;
-	int result;
-
-	switch (pdrv) {
-	case DEV_RAM :
-		result = RAM_disk_initialize();
-
-		// translate the reslut code here
-
-		return stat;
-
-	case DEV_MMC :
-		result = MMC_disk_initialize();
-
-		// translate the reslut code here
-
-		return stat;
-
-	case DEV_USB :
-		result = USB_disk_initialize();
-
-		// translate the reslut code here
-
-		return stat;
-	}
-	return STA_NOINIT;
+    if (pdrv != 0) return STA_NOINIT;
+    return s_ready ? 0 : STA_NOINIT;
 }
 
-
-
 /*-----------------------------------------------------------------------*/
-/* Read Sector(s)                                                        */
+/* Đọc sector(s)                                                         */
 /*-----------------------------------------------------------------------*/
-
-DRESULT disk_read (
-	BYTE pdrv,		/* Physical drive nmuber to identify the drive */
-	BYTE *buff,		/* Data buffer to store read data */
-	LBA_t sector,	/* Start sector in LBA */
-	UINT count		/* Number of sectors to read */
-)
+DRESULT disk_read(BYTE pdrv, BYTE *buff, LBA_t sector, UINT count)
 {
-	DRESULT res;
-	int result;
+    if (pdrv != 0 || !s_ready) return RES_NOTRDY;
 
-	switch (pdrv) {
-	case DEV_RAM :
-		// translate the arguments here
-
-		result = RAM_disk_read(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-
-	case DEV_MMC :
-		// translate the arguments here
-
-		result = MMC_disk_read(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-
-	case DEV_USB :
-		// translate the arguments here
-
-		result = USB_disk_read(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-	}
-
-	return RES_PARERR;
+    for (UINT i = 0; i < count; i++) {
+        if (SDCARD_ReadBlock(&s_sd,
+                             (uint32_t)(sector + i),
+                             buff + (i * SDCARD_BLOCK_SIZE)) != SD_OK) {
+            return RES_ERROR;
+        }
+    }
+    return RES_OK;
 }
 
-
-
 /*-----------------------------------------------------------------------*/
-/* Write Sector(s)                                                       */
+/* Ghi sector(s)                                                         */
 /*-----------------------------------------------------------------------*/
-
 #if FF_FS_READONLY == 0
-
-DRESULT disk_write (
-	BYTE pdrv,			/* Physical drive nmuber to identify the drive */
-	const BYTE *buff,	/* Data to be written */
-	LBA_t sector,		/* Start sector in LBA */
-	UINT count			/* Number of sectors to write */
-)
+DRESULT disk_write(BYTE pdrv, const BYTE *buff, LBA_t sector, UINT count)
 {
-	DRESULT res;
-	int result;
+    if (pdrv != 0 || !s_ready) return RES_NOTRDY;
 
-	switch (pdrv) {
-	case DEV_RAM :
-		// translate the arguments here
-
-		result = RAM_disk_write(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-
-	case DEV_MMC :
-		// translate the arguments here
-
-		result = MMC_disk_write(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-
-	case DEV_USB :
-		// translate the arguments here
-
-		result = USB_disk_write(buff, sector, count);
-
-		// translate the reslut code here
-
-		return res;
-	}
-
-	return RES_PARERR;
+    for (UINT i = 0; i < count; i++) {
+        if (SDCARD_WriteBlock(&s_sd,
+                              (uint32_t)(sector + i),
+                              buff + (i * SDCARD_BLOCK_SIZE)) != SD_OK) {
+            return RES_ERROR;
+        }
+    }
+    return RES_OK;
 }
-
 #endif
 
-
 /*-----------------------------------------------------------------------*/
-/* Miscellaneous Functions                                               */
+/* Lệnh điều khiển ổ đĩa (FatFs yêu cầu ít nhất CTRL_SYNC,             */
+/* GET_SECTOR_COUNT, GET_SECTOR_SIZE, GET_BLOCK_SIZE khi dùng f_mkfs)   */
 /*-----------------------------------------------------------------------*/
-
-DRESULT disk_ioctl (
-	BYTE pdrv,		/* Physical drive nmuber (0..) */
-	BYTE cmd,		/* Control code */
-	void *buff		/* Buffer to send/receive control data */
-)
+DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
 {
-	DRESULT res;
-	int result;
+    if (pdrv != 0 || !s_ready) return RES_NOTRDY;
 
-	switch (pdrv) {
-	case DEV_RAM :
+    switch (cmd) {
 
-		// Process of the command for the RAM drive
+    case CTRL_SYNC:
+        /* Driver ghi đồng bộ ngay lập tức, không có write-cache */
+        return RES_OK;
 
-		return res;
+    case GET_SECTOR_COUNT: {
+        uint64_t total_bytes = 0;
+        if (SDCARD_GetCapacityBytes(&s_sd, &total_bytes) != SD_OK)
+            return RES_ERROR;
+        *(LBA_t *)buff = (LBA_t)(total_bytes / SDCARD_BLOCK_SIZE);
+        return RES_OK;
+    }
 
-	case DEV_MMC :
+    case GET_SECTOR_SIZE:
+        *(WORD *)buff = (WORD)SDCARD_BLOCK_SIZE;
+        return RES_OK;
 
-		// Process of the command for the MMC/SD card
+    case GET_BLOCK_SIZE:
+        /* Không biết chính xác erase-block size của thẻ → trả về 1
+           (FatFs dùng giá trị mặc định khi f_mkfs() căn chỉnh cluster) */
+        *(DWORD *)buff = 1;
+        return RES_OK;
 
-		return res;
-
-	case DEV_USB :
-
-		// Process of the command the USB drive
-
-		return res;
-	}
-
-	return RES_PARERR;
+    default:
+        return RES_PARERR;
+    }
 }
-

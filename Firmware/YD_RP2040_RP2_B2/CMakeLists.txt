@@ -86,14 +86,13 @@ target_link_libraries(YD_RP2040_RP2_B2
 # Add the standard include files to the build
 target_include_directories(YD_RP2040_RP2_B2 PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
-        ${CMAKE_CURRENT_LIST_DIR}/FatFs
 )
 
 # Add any user requested libraries
 target_link_libraries(YD_RP2040_RP2_B2 
         hardware_spi
         hardware_i2c
+        hardware_uart
         )
 
 pico_add_extra_outputs(YD_RP2040_RP2_B2)
-

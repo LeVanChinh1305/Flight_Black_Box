@@ -734,117 +734,327 @@
 
 
 
-=====================================================================================
- MAIN TEST: DUNG LUONG THE + FILE LOG GIA LAP (GHI MOI GIAY -> DOC LAI -> XOA SAU 1 PHUT)
- Cach dung: tam thoi thay noi dung src/main.cpp bang file nay, build & nap,
- mo Serial Monitor de xem ket qua. Test xong nho khoi phuc lai main.cpp UI goc.
-=====================================================================================
+// =====================================================================================
+//  MAIN TEST: DUNG LUONG THE + FILE LOG GIA LAP (GHI MOI GIAY -> DOC LAI -> XOA SAU 1 PHUT)
+//  Cach dung: tam thoi thay noi dung src/main.cpp bang file nay, build & nap,
+//  mo Serial Monitor de xem ket qua. Test xong nho khoi phuc lai main.cpp UI goc.
+// =====================================================================================
 
-#include <stdio.h>
-#include <string.h>
-#include "pico/stdlib.h"
+// #include <stdio.h>
+// #include <string.h>
+// #include "pico/stdlib.h"
 
-#include "components/xpt2046/xpt2046.h"   // bắt buộc init trước để cấu hình bus SPI0
-#include "components/sdcard/sdcard.h"
+// #include "components/xpt2046/xpt2046.h"   // bắt buộc init trước để cấu hình bus SPI0
+// #include "components/sdcard/sdcard.h"
 
-static xpt2046_dev_t g_touch;
-static sd_dev_t      g_sd;
+// static xpt2046_dev_t g_touch;
+// static sd_dev_t      g_sd;
 
-// In dung lượng dạng dễ đọc (KB/MB/GB) thay vì số byte thô khó nhìn
-static void print_capacity_human(const char *label, uint64_t bytes) {
-    double mb = (double)bytes / (1024.0 * 1024.0);
-    if (mb >= 1024.0) {
-        printf("    %s: %.2f GB (%llu byte)\n", label, mb / 1024.0, (unsigned long long)bytes);
-    } else {
-        printf("    %s: %.2f MB (%llu byte)\n", label, mb, (unsigned long long)bytes);
-    }
-}
+// // In dung lượng dạng dễ đọc (KB/MB/GB) thay vì số byte thô khó nhìn
+// static void print_capacity_human(const char *label, uint64_t bytes) {
+//     double mb = (double)bytes / (1024.0 * 1024.0);
+//     if (mb >= 1024.0) {
+//         printf("    %s: %.2f GB (%llu byte)\n", label, mb / 1024.0, (unsigned long long)bytes);
+//     } else {
+//         printf("    %s: %.2f MB (%llu byte)\n", label, mb, (unsigned long long)bytes);
+//     }
+// }
 
-int main() {
-    stdio_init_all();
-    sleep_ms(3000); // chờ máy tính kịp mở cổng Serial
+// int main() {
+//     stdio_init_all();
+//     sleep_ms(3000); // chờ máy tính kịp mở cổng Serial
 
-    printf("\n========================================\n");
-    printf("  TEST: DUNG LUONG THE + FILE LOG SD\n");
-    printf("========================================\n\n");
+//     printf("\n========================================\n");
+//     printf("  TEST: DUNG LUONG THE + FILE LOG SD\n");
+//     printf("========================================\n\n");
 
-    // ---------------- Khởi tạo bus SPI0 + thẻ SD ----------------
-    printf("[INIT] Khoi tao bus SPI0 (qua XPT2046) + the SD...\n");
-    if (XPT2046_Init(&g_touch, XPT2046_SPI_PORT) != XPT_OK) {
-        printf("  >>> LOI: Khong khoi tao duoc bus SPI0!\n");
-        while (1) sleep_ms(1000);
-    }
-    if (SDCARD_Init(&g_sd, SDCARD_SPI_PORT) != SD_OK) {
-        printf("  >>> LOI: Khong khoi tao duoc the SD!\n");
-        while (1) sleep_ms(1000);
-    }
-    printf("  OK. Loai the: %s\n\n", (g_sd.card_type == SD_TYPE_SDHC) ? "SDHC/SDXC" : "SDSC");
+//     // ---------------- Khởi tạo bus SPI0 + thẻ SD ----------------
+//     printf("[INIT] Khoi tao bus SPI0 (qua XPT2046) + the SD...\n");
+//     if (XPT2046_Init(&g_touch, XPT2046_SPI_PORT) != XPT_OK) {
+//         printf("  >>> LOI: Khong khoi tao duoc bus SPI0!\n");
+//         while (1) sleep_ms(1000);
+//     }
+//     if (SDCARD_Init(&g_sd, SDCARD_SPI_PORT) != SD_OK) {
+//         printf("  >>> LOI: Khong khoi tao duoc the SD!\n");
+//         while (1) sleep_ms(1000);
+//     }
+//     printf("  OK. Loai the: %s\n\n", (g_sd.card_type == SD_TYPE_SDHC) ? "SDHC/SDXC" : "SDSC");
 
-    // ---------------- Bước 1: đọc dung lượng thẻ (CSD) ----------------
-    printf("[1] Doc dung luong the (thanh ghi CSD)...\n");
-    uint64_t total_bytes = 0;
-    if (SDCARD_GetCapacityBytes(&g_sd, &total_bytes) == SD_OK) {
-        print_capacity_human("Tong dung luong vat ly cua the", total_bytes);
-    } else {
-        printf("    >>> LOI: Khong doc duoc dung luong the (CMD9 that bai).\n");
-    }
+//     // ---------------- Bước 1: đọc dung lượng thẻ (CSD) ----------------
+//     printf("[1] Doc dung luong the (thanh ghi CSD)...\n");
+//     uint64_t total_bytes = 0;
+//     if (SDCARD_GetCapacityBytes(&g_sd, &total_bytes) == SD_OK) {
+//         print_capacity_human("Tong dung luong vat ly cua the", total_bytes);
+//     } else {
+//         printf("    >>> LOI: Khong doc duoc dung luong the (CMD9 that bai).\n");
+//     }
 
-    // LƯU Ý QUAN TRỌNG: vì driver này thao tác BLOCK THÔ (chưa có FAT32/FatFs), nên không thể
-    // biết "đã dùng/còn trống" của TOÀN THẺ theo đúng nghĩa hệ điều hành (điều đó đòi hỏi đọc
-    // bảng FAT thật). Ở đây mình chỉ báo cáo mức SỬ DỤNG TRONG VÙNG FILE LOG do driver tự quản lý
-    // (xem bước 2) như một con số tham khảo, KHÔNG đại diện cho toàn bộ thẻ.
-    uint64_t sdlog_region_bytes = (uint64_t)SDLOG_DATA_BLOCK_COUNT * SDCARD_BLOCK_SIZE;
-    print_capacity_human("Vung file log rieng (driver tu quan ly)", sdlog_region_bytes);
-    printf("\n");
+//     // LƯU Ý QUAN TRỌNG: vì driver này thao tác BLOCK THÔ (chưa có FAT32/FatFs), nên không thể
+//     // biết "đã dùng/còn trống" của TOÀN THẺ theo đúng nghĩa hệ điều hành (điều đó đòi hỏi đọc
+//     // bảng FAT thật). Ở đây mình chỉ báo cáo mức SỬ DỤNG TRONG VÙNG FILE LOG do driver tự quản lý
+//     // (xem bước 2) như một con số tham khảo, KHÔNG đại diện cho toàn bộ thẻ.
+//     uint64_t sdlog_region_bytes = (uint64_t)SDLOG_DATA_BLOCK_COUNT * SDCARD_BLOCK_SIZE;
+//     print_capacity_human("Vung file log rieng (driver tu quan ly)", sdlog_region_bytes);
+//     printf("\n");
 
-    // ---------------- Bước 2: tạo (reset) file log ----------------
-    printf("[2] Tao file log (vung block rieng, ghi tuan tu)...\n");
-    if (SDLOG_Create(&g_sd) != SD_OK) {
-        printf("    >>> LOI: Khong tao duoc file log, dung chuong trinh.\n");
-        while (1) sleep_ms(1000);
-    }
-    printf("\n");
+//     // ---------------- Bước 2: tạo (reset) file log ----------------
+//     printf("[2] Tao file log (vung block rieng, ghi tuan tu)...\n");
+//     if (SDLOG_Create(&g_sd) != SD_OK) {
+//         printf("    >>> LOI: Khong tao duoc file log, dung chuong trinh.\n");
+//         while (1) sleep_ms(1000);
+//     }
+//     printf("\n");
 
-    // ---------------- Bước 3: ghi 1 tín hiệu mỗi giây trong 60 giây ----------------
-    printf("[3] Ghi tin hieu don gian moi giay, lien tuc trong 60 giay...\n\n");
-    const int LOG_DURATION_SEC = 60;
-    for (int sec = 1; sec <= LOG_DURATION_SEC; sec++) {
-        sleep_ms(1000);
+//     // ---------------- Bước 3: ghi 1 tín hiệu mỗi giây trong 60 giây ----------------
+//     printf("[3] Ghi tin hieu don gian moi giay, lien tuc trong 60 giay...\n\n");
+//     const int LOG_DURATION_SEC = 60;
+//     for (int sec = 1; sec <= LOG_DURATION_SEC; sec++) {
+//         sleep_ms(1000);
 
-        uint32_t t_ms = to_ms_since_boot(get_absolute_time());
-        char line[SDLOG_RECORD_SIZE];
-        // Tín hiệu test đơn giản: "SIG,<so_thu_tu>,<thoi_gian_ms>"
-        snprintf(line, sizeof(line), "SIG,%d,%lu", sec, (unsigned long)t_ms);
+//         uint32_t t_ms = to_ms_since_boot(get_absolute_time());
+//         char line[SDLOG_RECORD_SIZE];
+//         // Tín hiệu test đơn giản: "SIG,<so_thu_tu>,<thoi_gian_ms>"
+//         snprintf(line, sizeof(line), "SIG,%d,%lu", sec, (unsigned long)t_ms);
 
-        SD_Status st = SDLOG_Append(&g_sd, line);
-        printf("  [%2d/%d] Ghi: \"%s\" -> %s\n",
-               sec, LOG_DURATION_SEC, line, (st == SD_OK) ? "OK" : "LOI");
-    }
-    printf("\n");
+//         SD_Status st = SDLOG_Append(&g_sd, line);
+//         printf("  [%2d/%d] Ghi: \"%s\" -> %s\n",
+//                sec, LOG_DURATION_SEC, line, (st == SD_OK) ? "OK" : "LOI");
+//     }
+//     printf("\n");
 
-    // ---------------- Bước 4: đọc lại toàn bộ nội dung file log, in ra terminal ----------------
-    printf("[4] Doc lai toan bo noi dung file log...\n\n");
-    uint32_t record_count = 0;
-    SDLOG_GetRecordCount(&g_sd, &record_count);
-    printf("  Tong so ban ghi hien co: %u\n", (unsigned)record_count);
-    SDLOG_PrintAll(&g_sd);
-    printf("\n");
+//     // ---------------- Bước 4: đọc lại toàn bộ nội dung file log, in ra terminal ----------------
+//     printf("[4] Doc lai toan bo noi dung file log...\n\n");
+//     uint32_t record_count = 0;
+//     SDLOG_GetRecordCount(&g_sd, &record_count);
+//     printf("  Tong so ban ghi hien co: %u\n", (unsigned)record_count);
+//     SDLOG_PrintAll(&g_sd);
+//     printf("\n");
 
-    // ---------------- Bước 5: xoá dữ liệu file log ----------------
-    printf("[5] Xoa du lieu file log...\n");
-    SDLOG_Delete(&g_sd);
+//     // ---------------- Bước 5: xoá dữ liệu file log ----------------
+//     printf("[5] Xoa du lieu file log...\n");
+//     SDLOG_Delete(&g_sd);
 
-    // Xác nhận lại: đọc số bản ghi sau khi xoá, in lại nội dung (phải rỗng)
-    SDLOG_GetRecordCount(&g_sd, &record_count);
-    printf("  Sau khi xoa, so ban ghi con lai: %u\n", (unsigned)record_count);
-    SDLOG_PrintAll(&g_sd);
+//     // Xác nhận lại: đọc số bản ghi sau khi xoá, in lại nội dung (phải rỗng)
+//     SDLOG_GetRecordCount(&g_sd, &record_count);
+//     printf("  Sau khi xoa, so ban ghi con lai: %u\n", (unsigned)record_count);
+//     SDLOG_PrintAll(&g_sd);
 
-    printf("\n========================================\n");
-    printf("   HOAN TAT TOAN BO QUY TRINH TEST!\n");
-    printf("========================================\n\n");
+//     printf("\n========================================\n");
+//     printf("   HOAN TAT TOAN BO QUY TRINH TEST!\n");
+//     printf("========================================\n\n");
 
-    while (1) {
-        sleep_ms(2000);
-        printf("[IDLE] Da hoan tat, dang cho... (cat nguon hoac nap lai firmware khac)\n");
-    }
-}
+//     while (1) {
+//         sleep_ms(2000);
+//         printf("[IDLE] Da hoan tat, dang cho... (cat nguon hoac nap lai firmware khac)\n");
+//     }
+// }
+
+
+
+
+
+// ------------------------------------test file -----------------------------------
+// // =====================================================================================
+// //  TEST FATFS – GHI FILE .CSV THẬT TRÊN THE SD
+// //  Luong:
+// //   1. Mount the (hoac tu format neu chua co FAT)
+// //   2. Hien thi dung luong tong/da dung/con trong (f_getfree)
+// //   3. Tao file "LOG.CSV" – ghi 60 ban ghi (moi giay 1 ban ghi)
+// //   4. Doc lai toan bo file – in ra terminal
+// //   5. Xoa file
+// //   6. Xac nhan file da mat (f_stat tra FR_NO_FILE)
+// // =====================================================================================
+
+// #include <stdio.h>
+// #include <string.h>
+// #include "pico/stdlib.h"
+// #include "fatfs/ff.h"
+// #include "fatfs/diskio.h"
+
+// // ---- ham tien ich in dung luong dang KB/MB/GB ---
+// static void print_size(const char *label, uint64_t bytes)
+// {
+//     if (bytes >= 1024ULL * 1024 * 1024)
+//         printf("  %-22s %.2f GB\n", label, (double)bytes / (1024.0*1024*1024));
+//     else if (bytes >= 1024ULL * 1024)
+//         printf("  %-22s %.2f MB\n", label, (double)bytes / (1024.0*1024));
+//     else
+//         printf("  %-22s %.2f KB\n", label, (double)bytes / 1024.0);
+// }
+
+// // ---- chuyen ma loi FatFs sang chuoi de doc ---
+// static const char *fr_str(FRESULT r)
+// {
+//     switch (r) {
+//     case FR_OK:              return "FR_OK";
+//     case FR_DISK_ERR:        return "FR_DISK_ERR";
+//     case FR_INT_ERR:         return "FR_INT_ERR";
+//     case FR_NOT_READY:       return "FR_NOT_READY";
+//     case FR_NO_FILE:         return "FR_NO_FILE";
+//     case FR_NO_PATH:         return "FR_NO_PATH";
+//     case FR_NO_FILESYSTEM:   return "FR_NO_FILESYSTEM";
+//     case FR_MKFS_ABORTED:    return "FR_MKFS_ABORTED";
+//     case FR_INVALID_NAME:    return "FR_INVALID_NAME";
+//     default:                 return "FR_???";
+//     }
+// }
+
+// int main()
+// {
+//     stdio_init_all();
+
+//     // Chờ cho đến khi cổng USB CDC được máy tính nhận và mở
+//     // (thay vì sleep cố định có thể in trước khi Serial Monitor kịp kết nối)
+//     while (!stdio_usb_connected()) sleep_ms(100);
+
+//     printf("\n========================================\n");
+//     printf("   TEST FATFS – FILE CSV TREN THE SD\n");
+//     printf("========================================\n\n");
+
+//     // ----------------------------------------------------------------
+//     // BUOC 1: mount – neu chua co FAT thi tu format (FAT32)
+//     // ----------------------------------------------------------------
+//     printf("[1] Mount the SD...\n");
+//     static FATFS fs;
+//     FRESULT fr = f_mount(&fs, "", 1);   // "" = drive 0, 1 = mount ngay lap tuc
+
+//     if (fr == FR_NO_FILESYSTEM) {
+//         printf("  The chua co FAT – dang format FAT32 (co the mat vai giay)...\n");
+//         static BYTE work[FF_MAX_SS];    // buffer lam viec cho f_mkfs (512 byte)
+//         MKFS_PARM opt = { FM_FAT32, 0, 0, 0, 0 };
+//         fr = f_mkfs("", &opt, work, sizeof(work));
+//         if (fr != FR_OK) {
+//             printf("  >>> LOI format: %s  Kiem tra lai the SD.\n", fr_str(fr));
+//             while (1) sleep_ms(2000);
+//         }
+//         printf("  Format xong. Mount lai...\n");
+//         fr = f_mount(&fs, "", 1);
+//     }
+
+//     if (fr != FR_OK) {
+//         printf("  >>> LOI mount: %s\n", fr_str(fr));
+//         while (1) sleep_ms(2000);
+//     }
+//     printf("  Mount OK.\n\n");
+
+//     // ----------------------------------------------------------------
+//     // BUOC 2: dung luong
+//     // ----------------------------------------------------------------
+//     printf("[2] Dung luong the:\n");
+//     DWORD free_clusters;
+//     FATFS *pfs = &fs;
+//     fr = f_getfree("", &free_clusters, &pfs);
+//     if (fr == FR_OK) {
+//         uint64_t total_bytes = (uint64_t)(pfs->n_fatent - 2) * pfs->csize * FF_MAX_SS;
+//         uint64_t free_bytes  = (uint64_t)free_clusters       * pfs->csize * FF_MAX_SS;
+//         uint64_t used_bytes  = total_bytes - free_bytes;
+//         print_size("Tong dung luong:", total_bytes);
+//         print_size("Da su dung:",      used_bytes);
+//         print_size("Con trong:",       free_bytes);
+//     } else {
+//         printf("  LOI f_getfree: %s\n", fr_str(fr));
+//     }
+//     printf("\n");
+
+//     // ----------------------------------------------------------------
+//     // BUOC 3: tao / ghi file LOG.CSV
+//     // ----------------------------------------------------------------
+//     printf("[3] Ghi file LOG.CSV (60 ban ghi, moi giay 1 ban ghi)...\n");
+//     static FIL fil;
+//     fr = f_open(&fil, "LOG.CSV", FA_CREATE_ALWAYS | FA_WRITE);
+//     if (fr != FR_OK) {
+//         printf("  >>> LOI mo file de ghi: %s\n", fr_str(fr));
+//         while (1) sleep_ms(2000);
+//     }
+
+//     // Dong tieu de
+//     f_printf(&fil, "STT,TIME_MS,SIGNAL,NOTE\r\n");
+
+//     for (int i = 1; i <= 60; i++) {
+//         sleep_ms(1000);
+//         uint32_t t_ms = to_ms_since_boot(get_absolute_time());
+//         // Format CSV: so thu tu, thoi gian ms, gia tri tin hieu test, ghi chu
+//         UINT bw;
+//         char line[80];
+//         snprintf(line, sizeof(line), "%d,%lu,SIG_%d,test\r\n",
+//                  i, (unsigned long)t_ms, i);
+//         f_write(&fil, line, strlen(line), &bw);
+//         printf("  [%2d/60] %s", i, line);
+//     }
+
+//     f_close(&fil);
+//     printf("  Dong file OK.\n\n");
+
+//     // ----------------------------------------------------------------
+//     // BUOC 4: doc lai toan bo file
+//     // ----------------------------------------------------------------
+//     printf("[4] Doc lai LOG.CSV:\n");
+//     printf("  %-4s %-12s %-10s %s\n", "STT", "TIME_MS", "SIGNAL", "NOTE");
+//     printf("  %s\n", "------------------------------------");
+
+//     fr = f_open(&fil, "LOG.CSV", FA_READ);
+//     if (fr != FR_OK) {
+//         printf("  >>> LOI mo file de doc: %s\n", fr_str(fr));
+//     } else {
+//         char buf[80];
+//         int line_num = 0;
+//         while (f_gets(buf, sizeof(buf), &fil)) {
+//             // Bo dong tieu de
+//             if (line_num++ == 0) continue;
+//             // Xoa ky tu xuong dong cuoi de in gon
+//             int len = strlen(buf);
+//             while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n'))
+//                 buf[--len] = '\0';
+//             printf("  %s\n", buf);
+//         }
+//         f_close(&fil);
+//     }
+//     printf("\n");
+
+//     // ----------------------------------------------------------------
+//     // BUOC 5: xoa file
+//     // ----------------------------------------------------------------
+//     printf("[5] Xoa LOG.CSV...\n");
+//     fr = f_unlink("LOG.CSV");
+//     printf("  f_unlink: %s\n\n", fr_str(fr));
+
+//     // ----------------------------------------------------------------
+//     // BUOC 6: xac nhan da xoa (f_stat phai tra FR_NO_FILE)
+//     // ----------------------------------------------------------------
+//     printf("[6] Xac nhan file da bi xoa (f_stat):\n");
+//     FILINFO fno;
+//     fr = f_stat("LOG.CSV", &fno);
+//     if (fr == FR_NO_FILE) {
+//         printf("  OK – file khong con ton tai (FR_NO_FILE).\n\n");
+//     } else {
+//         printf("  CANH BAO – f_stat tra: %s (du kien FR_NO_FILE).\n\n", fr_str(fr));
+//     }
+
+//     // Dung luong sau khi xoa
+//     printf("  Dung luong sau khi xoa:\n");
+//     fr = f_getfree("", &free_clusters, &pfs);
+//     if (fr == FR_OK) {
+//         uint64_t total_bytes = (uint64_t)(pfs->n_fatent - 2) * pfs->csize * FF_MAX_SS;
+//         uint64_t free_bytes  = (uint64_t)free_clusters       * pfs->csize * FF_MAX_SS;
+//         print_size("  Con trong:", free_bytes);
+//         print_size("  Da dung:", total_bytes - free_bytes);
+//     }
+
+//     f_mount(NULL, "", 0);   // unmount sach se
+
+//     printf("\n========================================\n");
+//     printf("  HOAN TAT! File .csv da duoc tao, doc\n");
+//     printf("  va xoa thanh cong qua FatFs + SD SPI.\n");
+//     printf("========================================\n\n");
+
+//     while (1) sleep_ms(5000);
+// }
+
+
+
+
+
+
+
+
+//------------------------------------test module sim ---------------------------

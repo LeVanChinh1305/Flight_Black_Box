@@ -92,42 +92,45 @@ SD_Status SDCARD_Init(sd_dev_t *dev, spi_inst_t *handle_spi) {
     do {
         r1 = SD_SendCommand(dev, SDCARD_CMD0, 0x00000000, 0x95); // CRC cố định đúng chuẩn cho CMD0
         retry++;
-    } while (r1 != 0x01 && retry < SD_CMD_RESP_RETRY);
+    } while (!(r1 & 0x01) && retry < SD_CMD_RESP_RETRY);
 
     SD_CS_Deselect();
     SD_Transfer(dev, 0xFF);
 
-    if (r1 != 0x01) {
+    if (!(r1 & 0x01)) {
         printf("[SDCARD] LOI: Khong vao duoc trang thai IDLE (CMD0). R1=0x%02X\n", r1);
         return SD_ERROR;
     }
 
-    // Bước 3: CMD8 - SEND_IF_COND, kiểm tra thẻ có hỗ trợ chuẩn SDv2 và điện áp 3.3V không
-    // Tham số 0x1AA = VHS(0x1=2.7-3.6V) + check pattern (0xAA)
+    // Bước 3: CMD8 - phân biệt SDv2 (có CMD8) và SDv1 (không có CMD8)
     r1 = SD_SendCommand(dev, SDCARD_CMD8, 0x000001AA, 0x87);
     uint8_t r7[4] = {0};
-    bool is_v2 = (r1 == 0x01);
+    // SDv2 trả R1=0x01 (idle). SDv1 trả 0x05 (illegal cmd) hoặc 0x03 (idle+erase_reset).
+    // Chỉ cần kiểm tra bit0=idle VÀ bit2=illegal_cmd=0 là đủ phân biệt.
+    bool is_v2 = (r1 & 0x01) && !(r1 & 0x04);
+
     if (is_v2) {
         for (int i = 0; i < 4; i++) r7[i] = SD_Transfer(dev, 0xFF);
+        SD_CS_Deselect();
+        SD_Transfer(dev, 0xFF);
+        if (!(r7[2] == 0x01 && r7[3] == 0xAA)) {
+            printf("[SDCARD] LOI: The SDv2 nhung sai check pattern CMD8 (dien ap khong phu hop).\n");
+            return SD_ERROR;
+        }
+        printf("[SDCARD] Phat hien the SDv2.\n");
+    } else {
+        // SDv1: drain byte rác (nếu có), nhả CS rồi tiếp tục bằng trình tự khởi tạo SDv1
+        SD_CS_Deselect();
+        SD_Transfer(dev, 0xFF);
+        printf("[SDCARD] CMD8 = 0x%02X -> the SDv1, thu trinh tu SDv1...\n", r1);
     }
-    SD_CS_Deselect();
-    SD_Transfer(dev, 0xFF);
 
-    if (is_v2 && !(r7[2] == 0x01 && r7[3] == 0xAA)) {
-        printf("[SDCARD] LOI: The khong ho tro dien ap 3.3V hoac sai check pattern (CMD8).\n");
-        return SD_ERROR;
-    }
-    if (!is_v2) {
-        // Không phản hồi CMD8 -> thẻ SDv1 hoặc MMC, driver tối giản này chưa hỗ trợ
-        printf("[SDCARD] LOI: The khong phan hoi CMD8 (co the la the SDv1/MMC cu, chua duoc ho tro).\n");
-        return SD_ERROR;
-    }
-
-    // Bước 4: gửi CMD55 + ACMD41 lặp lại cho đến khi thẻ thoát trạng thái idle (R1 = 0x00)
+    // Bước 4: ACMD41 - SDv2 dùng arg 0x40000000 (bit HCS=1), SDv1 dùng arg 0x00000000
+    uint32_t acmd41_arg = is_v2 ? 0x40000000 : 0x00000000;
     retry = 0;
     do {
-        SD_SendCommand(dev, SDCARD_CMD55, 0x00000000, 0x01); // báo lệnh kế tiếp là ACMD
-        r1 = SD_SendCommand(dev, SDCARD_ACMD41, 0x40000000, 0x01); // bit HCS=1: cho phép thẻ trả lời là SDHC
+        SD_SendCommand(dev, SDCARD_CMD55, 0x00000000, 0x01);
+        r1 = SD_SendCommand(dev, SDCARD_ACMD41, acmd41_arg, 0x01);
         SD_CS_Deselect();
         SD_Transfer(dev, 0xFF);
         if (r1 == 0x00) break;
@@ -136,11 +139,12 @@ SD_Status SDCARD_Init(sd_dev_t *dev, spi_inst_t *handle_spi) {
     } while (retry < SD_INIT_RETRY);
 
     if (r1 != 0x00) {
-        printf("[SDCARD] LOI: The khong thoat duoc trang thai IDLE sau ACMD41 (timeout). R1=0x%02X\n", r1);
+        printf("[SDCARD] LOI: ACMD41 timeout (R1=0x%02X). Co the la the MMC (chua ho tro).\n", r1);
         return SD_TIMEOUT;
     }
 
-    // Bước 5: CMD58 - đọc thanh ghi OCR để xác định thẻ là SDHC/SDXC hay SDSC
+    // Bước 5: CMD58 - đọc OCR, lấy bit CCS để phân biệt SDHC/SDXC và SDSC
+    // SDv1 không có bit CCS -> tự động nhận là SDSC (đúng)
     r1 = SD_SendCommand(dev, SDCARD_CMD58, 0x00000000, 0x01);
     uint8_t ocr[4] = {0};
     if (r1 == 0x00) {
@@ -149,9 +153,9 @@ SD_Status SDCARD_Init(sd_dev_t *dev, spi_inst_t *handle_spi) {
     SD_CS_Deselect();
     SD_Transfer(dev, 0xFF);
 
-    dev->card_type = (ocr[0] & 0x40) ? SD_TYPE_SDHC : SD_TYPE_SDSC; // bit CCS nằm ở bit6 byte đầu OCR
+    dev->card_type = (is_v2 && (ocr[0] & 0x40)) ? SD_TYPE_SDHC : SD_TYPE_SDSC;
 
-    // Bước 6: chỉ với thẻ SDSC mới cần ép độ dài block = 512 byte (SDHC luôn cố định 512)
+    // Bước 6: ép block size = 512 cho SDSC (SDv1 và SDv2-SDSC đều cần, SDHC bỏ qua)
     if (dev->card_type == SD_TYPE_SDSC) {
         r1 = SD_SendCommand(dev, SDCARD_CMD16, SDCARD_BLOCK_SIZE, 0x01);
         SD_CS_Deselect();
