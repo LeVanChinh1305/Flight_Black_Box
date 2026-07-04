@@ -1,3 +1,164 @@
+/**
+ * main.cpp - Flight Black Box (Hop Den May Bay)
+ *
+ * Kien truc:
+ *   - main() CHI lam 2 viec: (1) khoi tao phan cung nen tang (stdio...),
+ *     (2) tao cac task FreeRTOS roi goi vTaskStartScheduler().
+ *     Khong duoc viet logic doc cam bien / xu ly nghiep vu truc tiep trong main().
+ *   - Moi subsystem (BMI160, TFT, GPS, MQTT, buzzer...) la 1 task rieng,
+ *     dinh nghia trong file/section rieng ben duoi de de mo rong.
+ *   - Tai nguyen dung chung (SPI1 cho TFT+SD, UART cho GPS/SIM...) se dung
+ *     Mutex / Queue / StreamBuffer, khai bao la bien global "handle" va
+ *     truyen vao tung task qua tham so pvParameters khi tao task.
+ *
+ * Cach them 1 task moi:
+ *   1. Viet ham "static void TaskXxx(void *pvParameters) { ... for(;;) {...} }"
+ *      trong section TASK DEFINITIONS ben duoi.
+ *   2. Goi xTaskCreate(...) cho task do trong ham main().
+ */
+
+#include "pico/stdlib.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include <stdio.h>
+
+#include "bmi160.h"
+
+// =====================================================================
+// ================        CAU HINH CHUNG TOAN CUC        ==============
+// =====================================================================
+
+// Uu tien task: so cang lon cang uu tien cao. Danh sach nay se mo rong
+// dan khi them task moi de tien theo doi tuong quan uu tien giua cac task.
+#define PRIORITY_TASK_BMI160   (tskIDLE_PRIORITY + 2)
+
+// =====================================================================
+// ================     TAI NGUYEN DUNG CHUNG (mutex...)   ==============
+// =====================================================================
+// Vi du: SemaphoreHandle_t g_mutex_spi1 = NULL; // dung chung cho TFT + SD
+// Khoi tao trong main() truoc khi tao cac task can dung no.
+
+// =====================================================================
+// ================          TASK: BMI160 (IMU)            ==============
+// =====================================================================
+
+#define BMI160_TASK_STACK_SIZE   1024   // word (4 byte/word tren RP2040)
+#define BMI160_READ_PERIOD_MS    200    // chu ky doc FIFO
+
+// buffer FIFO dung rieng cho task nay (~200ms du lieu o 100Hz: ~20 frame * 12 byte = 240 byte)
+#define BMI160_FIFO_SCRATCH_SIZE 256
+#define BMI160_FIFO_MAX_FRAMES   32
+
+static void TaskBMI160(void *pvParameters) {
+    (void)pvParameters;
+
+    bmi_dev_t bmi;
+    BMI160_Config_t config = {
+        .accel_range = BMI_ACC_RANGE_4G,
+        .gyro_range  = BMI_GYR_RANGE_500DPS,
+        .accel_odr   = BMI_ACC_CONFIG_DEFAULT,   // 100Hz
+        .gyro_odr    = BMI_GYR_CONFIG_DEFAULT,   // 100Hz
+    };
+
+    // khoi tao cam bien, neu loi thi thu lai moi 500ms (khong lam chet ca he thong)
+    while (BMI160_Init(&bmi, BMI160_I2C_PORT, BMI160_I2C_ADDR, &config) != BMI_OK) {
+        printf("[TaskBMI160] Khoi tao BMI160 that bai, thu lai...\n");
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    // cau hinh FIFO: bat acc + gyro, header mode de de giai ma
+    BMI160_FIFO_Config_t fifo_cfg = {
+        .acc_en    = true,
+        .gyr_en    = true,
+        .header_en = true,
+        .time_en   = false,
+        .watermark = BMI_FIFO_WATERMARK_DEFAULT,
+    };
+    BMI160_FIFO_Config(&bmi, &fifo_cfg);
+
+    uint8_t scratch_buf[BMI160_FIFO_SCRATCH_SIZE];
+    BMI160_FIFO_Frame_t frames[BMI160_FIFO_MAX_FRAMES];
+    BMI160_FIFO_Result_t result;
+
+    // vong lap task: doc FIFO deu dan theo chu ky co dinh, khong bi troi (drift)
+    // theo thoi gian xu ly - quan trong khi sau nay chay chung voi nhieu task khac.
+    TickType_t lastWake = xTaskGetTickCount();
+    for (;;) {
+        BMI_Status status = BMI160_FIFO_ReadAndParse(&bmi, scratch_buf, BMI160_FIFO_SCRATCH_SIZE,
+                                                      frames, BMI160_FIFO_MAX_FRAMES, &result);
+
+        if (status == BMI_OK && result.frame_count > 0) {
+            BMI160_FIFO_Frame_t *last = &frames[result.frame_count - 1];
+            printf("[TaskBMI160] frames=%u  Acc(%d,%d,%d)  Gyro(%d,%d,%d)\n",
+                   result.frame_count,
+                   last->acc_x, last->acc_y, last->acc_z,
+                   last->gyr_x, last->gyr_y, last->gyr_z);
+        } else if (status != BMI_OK) {
+            printf("[TaskBMI160] Loi doc FIFO!\n");
+        }
+
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(BMI160_READ_PERIOD_MS));
+    }
+}
+
+// =====================================================================
+// ================      TASK MOI SE DUOC THEM O DAY        =============
+// =====================================================================
+// static void TaskTFT(void *pvParameters)   { ... }
+// static void TaskGPS(void *pvParameters)   { ... }
+// static void TaskMQTT(void *pvParameters)  { ... }
+// static void TaskBuzzer(void *pvParameters){ ... }
+
+// =====================================================================
+// ================   HOOK BAT BUOC CUA FREERTOS            =============
+// =====================================================================
+// Duoc goi tu dong khi configCHECK_FOR_STACK_OVERFLOW != 0 (dang bat trong
+// FreeRTOSConfig.h) va phat hien 1 task dung vuot qua stack da cap.
+extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+    (void)xTask;
+    printf("!!! STACK OVERFLOW o task: %s !!!\n", pcTaskName);
+    taskDISABLE_INTERRUPTS();
+    for (;;) { tight_loop_contents(); }
+}
+
+// =====================================================================
+// ================                MAIN                      =============
+// =====================================================================
+
+int main() {
+    stdio_init_all();
+    sleep_ms(2000); // cho mo cong USB-serial de khong mat log dau tien (bo neu dung UART thuong)
+
+    printf("=== Flight Black Box - Bat dau chuong trinh ===\n");
+
+    // ---- khoi tao tai nguyen dung chung truoc khi tao task (neu co) ----
+    // vi du: g_mutex_spi1 = xSemaphoreCreateMutex();
+
+    // ---- tao cac task ----
+    BaseType_t ok = xTaskCreate(
+        TaskBMI160,             // ham task
+        "TaskBMI160",           // ten task (hien trong debug/log)
+        BMI160_TASK_STACK_SIZE, // kich thuoc stack (word)
+        NULL,                   // tham so truyen vao task
+        PRIORITY_TASK_BMI160,   // do uu tien
+        NULL                    // khong can luu handle
+    );
+
+    if (ok != pdPASS) {
+        printf("Loi: khong the tao TaskBMI160!\n");
+        while (true) { tight_loop_contents(); }
+    }
+
+    // ---- them xTaskCreate(...) cho cac task moi tai day ----
+
+    // khoi dong scheduler, tu day FreeRTOS quan ly toan bo vong lap
+    vTaskStartScheduler();
+
+    // khong bao gio chay toi day neu scheduler khoi dong thanh cong
+    while (true) { tight_loop_contents(); }
+    return 0;
+}
+
 // #include <stdio.h>
 // #include "pico/stdlib.h"
 // #include "components/bmi160/bmi160.h"
@@ -1169,93 +1330,170 @@
 
 
 
-#include <stdio.h>
-#include "pico/stdlib.h"
-#include "components/sim7680/sim7680.h"
-#include "components/my_mqtt/my_mqtt.h"
+// #include <stdio.h>
+// #include "pico/stdlib.h"
+// #include "components/sim7680/sim7680.h"
+// #include "components/my_mqtt/my_mqtt.h"
 
-int main() {
-    // Khởi tạo toàn bộ cấu trúc Standard I/O (UART/USB Serial) để debug
-    stdio_init_all();
+// int main() {
+//     // Khởi tạo toàn bộ cấu trúc Standard I/O (UART/USB Serial) để debug
+//     stdio_init_all();
     
-    // Chờ cho đến khi cổng USB Serial được mở trên máy tính (Terminal/Serial Monitor)
-    while (!stdio_usb_connected()) {
-        sleep_ms(100);
-    }
-    sleep_ms(1000);
+//     // Chờ cho đến khi cổng USB Serial được mở trên máy tính (Terminal/Serial Monitor)
+//     while (!stdio_usb_connected()) {
+//         sleep_ms(100);
+//     }
+//     sleep_ms(1000);
 
-    printf("\n=== FLIGHT BLACK BOX - MQTT TEST ===\n\n");
+//     printf("\n=== FLIGHT BLACK BOX - MQTT TEST ===\n\n");
 
-    // Khởi tạo phần cứng UART giao tiếp giữa RP2040 và SIM7680
-    printf("Đang chờ module SIM khởi động...\n");
-    sim7680_init();
+//     // Khởi tạo phần cứng UART giao tiếp giữa RP2040 và SIM7680
+//     printf("Đang chờ module SIM khởi động...\n");
+//     sim7680_init();
 
-    // Chờ module SIM phản hồi lệnh AT cơ bản
-    if (!sim7680_wait_ready(15000)) {
-        printf("[LOI] Module SIM không phản hồi lệnh AT!\n");
-        while(1) sleep_ms(1000);
-    }
+//     // Chờ module SIM phản hồi lệnh AT cơ bản
+//     if (!sim7680_wait_ready(15000)) {
+//         printf("[LOI] Module SIM không phản hồi lệnh AT!\n");
+//         while(1) sleep_ms(1000);
+//     }
 
-    // Kiểm tra và chờ đăng ký mạng di động (Thành công khi net_status là 1 hoặc 5)
-    printf("Đang chờ đăng ký mạng...\n");
-    int net_status = 0;
-    uint32_t timeout = 30000;
-    absolute_time_t deadline = make_timeout_time_ms(timeout);
+//     // Kiểm tra và chờ đăng ký mạng di động (Thành công khi net_status là 1 hoặc 5)
+//     printf("Đang chờ đăng ký mạng...\n");
+//     int net_status = 0;
+//     uint32_t timeout = 30000;
+//     absolute_time_t deadline = make_timeout_time_ms(timeout);
 
-    while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
-        sim7680_get_network_status(&net_status);
-        if (net_status == 1 || net_status == 5) {
-            printf("[OK] Đã đăng ký mạng!\n");
-            break;
-        }
-        sleep_ms(2000);
-    }
+//     while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+//         sim7680_get_network_status(&net_status);
+//         if (net_status == 1 || net_status == 5) {
+//             printf("[OK] Đã đăng ký mạng!\n");
+//             break;
+//         }
+//         sleep_ms(2000);
+//     }
 
-    if (net_status != 1 && net_status != 5) {
-        printf("[LOI] Không đăng ký được mạng!\n");
-        while(1) sleep_ms(1000);
-    }
+//     if (net_status != 1 && net_status != 5) {
+//         printf("[LOI] Không đăng ký được mạng!\n");
+//         while(1) sleep_ms(1000);
+//     }
 
-    // ====================== CẤU HÌNH & KẾT NỐI MQTT ======================
-    printf("[MQTT] Khởi tạo...\n");
+//     // ====================== CẤU HÌNH & KẾT NỐI MQTT ======================
+//     printf("[MQTT] Khởi tạo...\n");
     
-    if (mqtt_init() && mqtt_connect()) {
-        // GIẢI PHÁP CHÍ MẠNG: Nghỉ 2 giây để dòng lệnh đồng bộ và stack mạng của SIM ổn định kết nối
-        printf("[MQTT] Chờ stack mạng ổn định trước khi Subscribe...\n");
-        sleep_ms(2000);
+//     if (mqtt_init() && mqtt_connect()) {
+//         // GIẢI PHÁP CHÍ MẠNG: Nghỉ 2 giây để dòng lệnh đồng bộ và stack mạng của SIM ổn định kết nối
+//         printf("[MQTT] Chờ stack mạng ổn định trước khi Subscribe...\n");
+//         sleep_ms(2000);
 
-        // Tiến hành đăng ký Topic nhận lệnh điều khiển từ Server
-        mqtt_subscribe(MQTT_TOPIC_COMMAND);
+//         // Tiến hành đăng ký Topic nhận lệnh điều khiển từ Server
+//         mqtt_subscribe(MQTT_TOPIC_COMMAND);
 
-        int counter = 0;
-        while (true) {
-            // Liên tục gọi hàm process để kiểm tra dữ liệu URC (tin nhắn đến từ broker)
-            mqtt_process();
+//         int counter = 0;
+//         while (true) {
+//             // Liên tục gọi hàm process để kiểm tra dữ liệu URC (tin nhắn đến từ broker)
+//             mqtt_process();
 
-            // Đóng gói chuỗi JSON Telemetry của Hộp đen hành trình
-            char payload[128];
-            snprintf(payload, sizeof(payload),
-                     "{\"device\":\"blackbox\",\"counter\":%d,\"status\":\"online\"}", 
-                     counter++);
+//             // Đóng gói chuỗi JSON Telemetry của Hộp đen hành trình
+//             char payload[128];
+//             snprintf(payload, sizeof(payload),
+//                      "{\"device\":\"blackbox\",\"counter\":%d,\"status\":\"online\"}", 
+//                      counter++);
 
-            // Tiến hành Publish dữ liệu hành trình
-            if (mqtt_publish(MQTT_TOPIC_TELEMETRY, payload, false)) {
-                printf("[OK] Published: %s\n", payload);
-            } else {
-                printf("[FAIL] Publish failed\n");
-            }
+//             // Tiến hành Publish dữ liệu hành trình
+//             if (mqtt_publish(MQTT_TOPIC_TELEMETRY, payload, false)) {
+//                 printf("[OK] Published: %s\n", payload);
+//             } else {
+//                 printf("[FAIL] Publish failed\n");
+//             }
 
-            // Giải pháp tránh block: Thay vì dùng sleep_ms(5000) gây chết luồng đọc UART,
-            // ta chia nhỏ thời gian delay ra làm nhiều chu kỳ ngắn và chèn mqtt_process() vào giữa
-            for (int i = 0; i < 50; i++) {
-                mqtt_process(); // Quét cổng UART liên tục để tóm bản tin từ Server gửi xuống
-                sleep_ms(100);  // 50 lần * 100ms = 5 giây giãn cách giữa các lần Publish
-            }
-        }
-    } else {
-        printf("[LOI] Không kết nối được MQTT Broker!\n");
-        while(1) sleep_ms(1000);
-    }
+//             // Giải pháp tránh block: Thay vì dùng sleep_ms(5000) gây chết luồng đọc UART,
+//             // ta chia nhỏ thời gian delay ra làm nhiều chu kỳ ngắn và chèn mqtt_process() vào giữa
+//             for (int i = 0; i < 50; i++) {
+//                 mqtt_process(); // Quét cổng UART liên tục để tóm bản tin từ Server gửi xuống
+//                 sleep_ms(100);  // 50 lần * 100ms = 5 giây giãn cách giữa các lần Publish
+//             }
+//         }
+//     } else {
+//         printf("[LOI] Không kết nối được MQTT Broker!\n");
+//         while(1) sleep_ms(1000);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+//--------------------------------------test buzzer (còi báo động)---------------------------------------
+ 
+ 
+ 
+ 
+// #include <stdio.h>
+// #include "pico/stdlib.h"
+// #include "components/buzzer/buzzer.h"
+ 
+// int main() {
+//     // Khởi tạo toàn bộ cấu trúc Standard I/O (UART/USB Serial) để debug
+//     stdio_init_all();
+ 
+//     // Chờ cho đến khi cổng USB Serial được mở trên máy tính (Terminal/Serial Monitor)
+//     while (!stdio_usb_connected()) {
+//         sleep_ms(100);
+//     }
+//     sleep_ms(1000);
+ 
+//     printf("\n=== FLIGHT BLACK BOX - BUZZER TEST ===\n\n");
+ 
+//     // Khởi tạo chân GPIO điều khiển còi
+//     Buzzer_Init();
+//     printf("[OK] Da khoi tao GPIO cho coi (GP%d)\n\n", BUZZER_PIN);
+ 
+//     // ---- Test 1: kêu 1 tiếng bíp ngắn đơn lẻ ----
+//     printf("[TEST 1] Kêu 1 tiếng bíp ngắn (%d ms)...\n", BUZZER_ALARM_BEEP_MS);
+//     Buzzer_Beep(BUZZER_ALARM_BEEP_MS);
+//     sleep_ms(1000);
+ 
+//     // ---- Test 2: mô phỏng "Boot Status Feedback" khi khởi động thành công ----
+//     printf("[TEST 2] Mô phỏng Boot OK: 2 tiếng bíp bíp ngắn...\n");
+//     Buzzer_BootOK();
+//     sleep_ms(1500);
+ 
+//     // ---- Test 3: mô phỏng cảnh báo lỗi nghiêm trọng lúc khởi động ----
+//     printf("[TEST 3] Mô phỏng Boot Error: 1 tiếng biiiíp dài (%d ms)...\n", BUZZER_ERROR_BEEP_MS);
+//     Buzzer_BootError();
+//     sleep_ms(1500);
+ 
+//     // ---- Test 4: kêu theo pattern tùy chỉnh (3 tiếng, 100ms mỗi tiếng, cách nhau 150ms) ----
+//     printf("[TEST 4] Kêu pattern tùy chỉnh: 3 tiếng bíp...\n");
+//     Buzzer_BeepPattern(3, 100, 150);
+//     sleep_ms(1500);
+ 
+//     // ---- Test 5: chế độ phát tín hiệu định vị (locate mode) - lặp vô hạn ----
+//     // Non-blocking: cứ mỗi BUZZER_ALARM_PERIOD_MS (mặc định 3 giây) sẽ kêu 1 tiếng lớn
+//     // để đội cứu hộ hoặc chính bạn dễ dàng lần theo âm thanh tìm lại Hộp đen.
+//     printf("[TEST 5] Bắt đầu chế độ định vị (locate mode) - lặp mỗi %d ms:\n", BUZZER_ALARM_PERIOD_MS);
+//     uint32_t tick_count = 0;
+//     while (true) {
+//         Buzzer_AlarmTick();
+ 
+//         // In log mỗi ~1 giây để biết chương trình vẫn đang chạy (không bị treo)
+//         if (tick_count % 100 == 0) {
+//             printf("  ... dang cho chu ky bip tiep theo (tick=%lu)\n", tick_count);
+//         }
+//         tick_count++;
+ 
+//         sleep_ms(10); // vòng lặp quét nhanh để Buzzer_AlarmTick() phản ứng đúng thời điểm
+//     }
+ 
+//     return 0;
+// }
