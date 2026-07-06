@@ -19,6 +19,10 @@ extern "C" {
 #define BMI160_PIN_SCL   21    // SCL  → GPIO 21
 #define BMI160_I2C_ADDR  0x68  // Địa chỉ I2C khi SA0 nối GND
 
+// Timeout cho mỗi giao dịch I2C (ms). Tránh task bị treo vĩnh viễn neu
+// bus I2C bi ket (SDA/SCL bi keo thap do loi phan cung, day dut...).
+#define BMI160_I2C_TIMEOUT_MS 20
+
 
 
 

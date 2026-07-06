@@ -5,6 +5,8 @@
 
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 // ---------- Hàm nội bộ ----------
 
@@ -41,6 +43,11 @@ static bool sim7680_read_response(char *response, size_t resp_size, uint32_t tim
             if (response && strstr(response, "ERROR") != NULL) {
                 return false;
             }
+        } else {
+            // Nhuong CPU cho cac task khac (GPS, BMI160...) thay vi busy-spin
+            // tuyet doi. Cac lenh AT/MQTT co the cho toi 15s, neu khong nhuong
+            // CPU o day thi cac task cung uu tien se bi doi hoan toan trong luc do.
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
 
@@ -84,7 +91,7 @@ bool sim7680_wait_ready(uint32_t timeout_ms)
         if (sim7680_send_cmd("AT", resp, sizeof(resp), 1000)) {
             return true;
         }
-        sleep_ms(500);
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
     return false;
 }
@@ -179,5 +186,3 @@ bool sim7680_get_radio_function(int *cfun)
     }
     return sscanf(p, "+CFUN: %d", cfun) == 1;
 }
-
-

@@ -70,8 +70,9 @@ typedef struct {
 } neo6m_dev_t;
 
 typedef enum {
-    NEO6M_OK    = 0,
-    NEO6M_ERROR = 1,
+    NEO6M_OK      = 0,
+    NEO6M_ERROR   = 1,
+    NEO6M_UNKNOWN = 2,   // Doc thanh cong 1 dong NMEA nhung khong phai GGA/RMC (chua parse)
 } NEO6M_Status;
 
 // -------------------- API Công khai --------------------

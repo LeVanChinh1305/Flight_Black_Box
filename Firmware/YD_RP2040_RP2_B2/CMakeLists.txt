@@ -50,14 +50,10 @@ add_executable(YD_RP2040_RP2_B2
     components/sdcard/sdcard.cpp
     components/tft/tft.h
     components/tft/tft.cpp
-    components/algorithm_neo6m/algorithm_neo6m.h
-    components/algorithm_neo6m/algorithm_neo6m.cpp
     components/algorithm_bmi160/algorithm_bmi160.h
     components/algorithm_bmi160/algorithm_bmi160.cpp
     components/xpt2046/xpt2046.h
     components/xpt2046/xpt2046.cpp
-    components/shared_data/shared_data.h
-    components/shared_data/shared_data.cpp
     components/font5x7/font5x7.cpp
     components/font5x7/font5x7.h
     fatfs/diskio.c
@@ -88,7 +84,6 @@ target_include_directories(YD_RP2040_RP2_B2 PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/components/neo6m
     ${CMAKE_CURRENT_LIST_DIR}/components/sdcard
     ${CMAKE_CURRENT_LIST_DIR}/components/tft
-    ${CMAKE_CURRENT_LIST_DIR}/components/algorithm_neo6m
     ${CMAKE_CURRENT_LIST_DIR}/components/algorithm_bmi160
     ${CMAKE_CURRENT_LIST_DIR}/components/xpt2046
     ${CMAKE_CURRENT_LIST_DIR}/components/shared_data

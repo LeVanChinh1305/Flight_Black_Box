@@ -1,5 +1,13 @@
 #include "neo6m.h"
 #include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
+
+// Kiem tra field co du do dai toi thieu truoc khi doc theo chi so
+// (tranh doc phai rac stack khi ban tin bi cat ngan / thieu ky tu)
+static bool field_len_ok(const char *field, size_t min_len) {
+    return field != NULL && strlen(field) >= min_len;
+}
 
 // Chuyển đổi tọa độ định dạng NMEA (DDDMM.MMMM) sang độ thập phân (Decimal Degree)
 static float nmea_to_decimal(const char *raw, char direction) {
@@ -74,7 +82,9 @@ NEO6M_Status NEO6M_Init(neo6m_dev_t *dev, uart_inst_t *handle_uart, uint pin_tx,
     gpio_set_function(dev->pin_tx, GPIO_FUNC_UART);
     gpio_set_function(dev->pin_rx, GPIO_FUNC_UART);
 
-    sleep_ms(500);
+    // Dung vTaskDelay thay vi sleep_ms de nhuong CPU cho scheduler FreeRTOS
+    // (sleep_ms cua pico-sdk la busy/blocking, khong "RTOS-aware")
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     dev->is_initialized = true;
     printf("[NEO6M] Khoi tao UART%d OK - Baud: %lu\n", uart_get_index(dev->handle_uart), (unsigned long)dev->baudrate);
@@ -94,7 +104,10 @@ NEO6M_Status NEO6M_ReadLine(neo6m_dev_t *dev) {
 
     while (!time_reached(t_deadline)) {
         if (!uart_is_readable(dev->handle_uart)) {
-            sleep_us(100);
+            // Nhuong CPU cho cac task khac thay vi busy-wait bang sleep_us.
+            // UART FIFO da duoc bat (uart_set_fifo_enabled) nen chiu duoc
+            // do tre poll ~1ms ma khong mat du lieu o baudrate 9600.
+            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
 
@@ -138,7 +151,7 @@ NEO6M_Status NEO6M_ParseGGA(const char *sentence, neo6m_data_t *data) {
 
     // Thời gian UTC
     get_field(sentence, 1, field, sizeof(field));
-    if (field[0] != '\0') {
+    if (field_len_ok(field, 6)) {
         char tmp[3] = {0};
         tmp[0] = field[0]; tmp[1] = field[1]; data->hour   = (uint8_t)atoi(tmp);
         tmp[0] = field[2]; tmp[1] = field[3]; data->minute = (uint8_t)atoi(tmp);
@@ -161,9 +174,9 @@ NEO6M_Status NEO6M_ParseGGA(const char *sentence, neo6m_data_t *data) {
     get_field(sentence, 6, field, sizeof(field));
     int fix = atoi(field);
     data->fix_quality = (neo6m_fix_quality_t)fix;
-    if (fix > 0) {
-        data->is_valid = true;
-    }
+    // Luon cap nhat is_valid theo trang thai fix hien tai (ca khi mat fix),
+    // tranh giu lai gia tri "true" cu tu lan doc truoc khi GPS mat tin hieu.
+    data->is_valid = (fix > 0);
 
     // Số lượng vệ tinh kết nối
     get_field(sentence, 7, field, sizeof(field));
@@ -195,7 +208,7 @@ NEO6M_Status NEO6M_ParseRMC(const char *sentence, neo6m_data_t *data) {
     }
 
     get_field(sentence, 1, field, sizeof(field));
-    if (field[0] != '\0') {
+    if (field_len_ok(field, 6)) {
         char tmp[3] = {0};
         tmp[0] = field[0]; tmp[1] = field[1]; data->hour   = (uint8_t)atoi(tmp);
         tmp[0] = field[2]; tmp[1] = field[3]; data->minute = (uint8_t)atoi(tmp);
@@ -221,7 +234,7 @@ NEO6M_Status NEO6M_ParseRMC(const char *sentence, neo6m_data_t *data) {
 
     // Ngày tháng năm thực tế
     get_field(sentence, 9, field, sizeof(field));
-    if (field[0] != '\0') {
+    if (field_len_ok(field, 6)) {
         char tmp[3] = {0};
         tmp[0] = field[0]; tmp[1] = field[1]; data->day   = (uint8_t)atoi(tmp);
         tmp[0] = field[2]; tmp[1] = field[3]; data->month = (uint8_t)atoi(tmp);
@@ -247,5 +260,7 @@ NEO6M_Status NEO6M_Update(neo6m_dev_t *dev, neo6m_data_t *data) {
         return NEO6M_ParseRMC(sentence, data);
     }
 
-    return NEO6M_OK; 
+    // Doc duoc 1 dong hop le nhung khong phai GGA/RMC (vi du GPVTG, GPGSA...)
+    // -> bao cho caller biet "data" chua duoc cap nhat, tranh nham la du lieu moi.
+    return NEO6M_UNKNOWN;
 }

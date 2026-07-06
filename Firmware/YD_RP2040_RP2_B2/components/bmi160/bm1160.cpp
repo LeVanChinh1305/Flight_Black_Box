@@ -1,5 +1,7 @@
 #include "bmi160.h"
 #include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
 
 
 
@@ -12,9 +14,11 @@ static BMI_Status BMI_Write_Reg(bmi_dev_t *dev, uint8_t reg_addr, uint8_t data) 
     write_buf[0] = reg_addr; // Giao tiếp I2C không cần mask bit như SPI
     write_buf[1] = data;
 
-    // Gửi địa chỉ thanh ghi kèm dữ liệu cần ghi
-    int ret = i2c_write_blocking(dev->handle_i2c, dev->i2c_addr, write_buf, 2, false);
-    
+    // Dung ban "_until" voi deadline de tranh treo vinh vien task neu
+    // bus I2C bi ket (thiet bi mat ket noi, day dut, SDA/SCL bi keo thap...)
+    absolute_time_t deadline = make_timeout_time_ms(BMI160_I2C_TIMEOUT_MS);
+    int ret = i2c_write_blocking_until(dev->handle_i2c, dev->i2c_addr, write_buf, 2, false, deadline);
+
     return (ret >= 0) ? BMI_OK : BMI_ERROR;
 }
 
@@ -22,11 +26,13 @@ static BMI_Status BMI_Read_Reg(bmi_dev_t *dev, uint8_t reg_addr, uint8_t *data, 
     if (dev == NULL || dev->handle_i2c == NULL) return BMI_ERROR;
 
     // Bước 1: Gửi địa chỉ thanh ghi muốn đọc (nostop = true để giữ bus)
-    int ret = i2c_write_blocking(dev->handle_i2c, dev->i2c_addr, &reg_addr, 1, true);
+    absolute_time_t deadline = make_timeout_time_ms(BMI160_I2C_TIMEOUT_MS);
+    int ret = i2c_write_blocking_until(dev->handle_i2c, dev->i2c_addr, &reg_addr, 1, true, deadline);
     if (ret < 0) return BMI_ERROR;
 
-    // Bước 2: Đọc dữ liệu trả về từ cảm biến
-    ret = i2c_read_blocking(dev->handle_i2c, dev->i2c_addr, data, len, false);
+    // Bước 2: Đọc dữ liệu trả về từ cảm biến (deadline moi cho giai doan doc)
+    deadline = make_timeout_time_ms(BMI160_I2C_TIMEOUT_MS);
+    ret = i2c_read_blocking_until(dev->handle_i2c, dev->i2c_addr, data, len, false, deadline);
 
     return (ret >= 0) ? BMI_OK : BMI_ERROR;
 }
@@ -119,16 +125,16 @@ BMI_Status BMI160_Init(bmi_dev_t *dev, i2c_inst_t *handle_i2c, uint8_t i2c_addr,
     gpio_pull_up(BMI160_PIN_SDA);
     gpio_pull_up(BMI160_PIN_SCL);
 
-    sleep_ms(10); // chờ nguồn ổn định
+    vTaskDelay(pdMS_TO_TICKS(10)); // cho nguon on dinh
 
     // reset chip 
     BMI160_SendCommand(dev, BMI_CMD_SOFT_RESET);
-    sleep_ms(15); // cần delay ít nhất 15ms sau khi reset theo Datasheet
+    vTaskDelay(pdMS_TO_TICKS(15)); // can delay it nhat 15ms sau khi reset theo Datasheet
 
     // Đọc thử để chip ổn định lại giao tiếp sau Reset
     uint8_t temp_id = 0;
     BMI160_ReadID(dev, &temp_id);
-    sleep_ms(2); 
+    vTaskDelay(pdMS_TO_TICKS(2));
 
     // kiểm tra id 
     if (BMI160_CheckConnection(dev) != BMI_OK) {
@@ -137,11 +143,19 @@ BMI_Status BMI160_Init(bmi_dev_t *dev, i2c_inst_t *handle_i2c, uint8_t i2c_addr,
     }
     printf("[BMI160] Ket noi I2C OK.\n");
 
-    // bật nguồn cảm biến 
-    BMI160_SendCommand(dev, BMI_CMD_ACC_NET_NORMAL);
-    sleep_ms(BMI_DELAY_ACC_PMU_MS);
-    BMI160_SendCommand(dev, BMI_CMD_GYR_NET_NORMAL);
-    sleep_ms(BMI_DELAY_GYRO_PMU_MS);
+    // bật nguồn cảm biến (kiem tra status: neu ghi lenh that bai, PMU se khong
+    // vao dung che do va du lieu doc sau nay se sai/khong on dinh)
+    if (BMI160_SendCommand(dev, BMI_CMD_ACC_NET_NORMAL) != BMI_OK) {
+        printf("[BMI160] Loi: khong the bat nguon Accelerometer!\n");
+        return BMI_ERROR;
+    }
+    vTaskDelay(pdMS_TO_TICKS(BMI_DELAY_ACC_PMU_MS));
+
+    if (BMI160_SendCommand(dev, BMI_CMD_GYR_NET_NORMAL) != BMI_OK) {
+        printf("[BMI160] Loi: khong the bat nguon Gyroscope!\n");
+        return BMI_ERROR;
+    }
+    vTaskDelay(pdMS_TO_TICKS(BMI_DELAY_GYRO_PMU_MS));
 
     // ghi cấu hình vào struct và cấu hình thanh ghi
     dev->config = *config;
