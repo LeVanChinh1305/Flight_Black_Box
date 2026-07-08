@@ -37,11 +37,8 @@ float BMI160_Algo_GetGyroSensitivity(uint8_t gyro_range);
 
 // Quy doi 1 frame FIFO tho (LSB) sang don vi vat ly, dua theo range accel/gyro
 // dang cau hinh cho cam bien (lay tu dev->config.accel_range / gyro_range).
-// Tra ve BMI_ERROR neu tham so NULL hoac ma range khong hop le (out se duoc
-// dien 0 trong truong hop loi, khong de gia tri rac).
-BMI_Status BMI160_Algo_ConvertFrame(const BMI160_FIFO_Frame_t *frame,
-                                     uint8_t accel_range, uint8_t gyro_range,
-                                     BMI160_Physical_t *out);
+// Tra ve BMI_ERROR neu tham so NULL hoac ma range khong hop le (out se duoc dien 0 trong truong hop loi, khong de gia tri rac).
+BMI_Status BMI160_Algo_ConvertFrame(const BMI160_FIFO_Frame_t *frame, uint8_t accel_range, uint8_t gyro_range, BMI160_Physical_t *out);
 
 #ifdef __cplusplus
 }

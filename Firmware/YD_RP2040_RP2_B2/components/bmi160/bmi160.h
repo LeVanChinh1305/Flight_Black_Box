@@ -130,8 +130,9 @@ extern "C" {
 #define BMI_FIFO_DOWNS_FILTERED_DIV_16          0x44 //
 
 // FIFO_CONFIG - cấu hình chế độ hoạt động của FIFO1/FIFO2 : địa chỉ : 0x46 / 0x47
-#define BMI_FIFO_WATERMARK_10_FRAMES            0x1E 
-#define BMI_FIFO_WATERMARK_DEFAULT              0x80 
+#define BMI_FIFO_WATERMARK_10_FRAMES            0x1E // cấu hình ngưỡng cảnh báo FIFO là 10 frame dữ liệu (40 byte)
+#define BMI_FIFO_WATERMARK_20_FRAMES            0x3C // cấu hình ngưỡng cảnh báo FIFO là 20 frame dữ liệu (80 byte)
+#define BMI_FIFO_WATERMARK_DEFAULT              0x80 // cấu hình mặc định, ngưỡng cảnh báo FIFO là 128 byte (32 frame dữ liệu acc+gyr)
 #define BMI_FIFO_DATA_SEL_ACC_ONLY              0x48
 #define BMI_FIFO_DATA_SEL_GYR_ONLY              0x88
 #define BMI_FIFO_DATA_SEL_ACC_GYR               0xC8
@@ -202,8 +203,9 @@ extern "C" {
 
 
 
-
-
+// -------------------------------------các chế độ hoạt động của FIFO-------------------------------------------
+#define BMI160_FIFO_MODE_STOP_WHEN_FULL     0
+#define BMI160_FIFO_MODE_OVERWRITE          1
 
 
 
@@ -248,6 +250,8 @@ typedef struct {
     bool header_en; // true: header mode (khuyến nghị, linh hoạt) | false: headerless mode
     bool time_en; // true: trả về sensortime frame khi đọc quá dữ liệu hợp lệ | false: không trả về sensortime frame
     uint8_t watermark; // ngưỡng cảnh báo dữ liệu FIFO (0-255), khi đạt ngưỡng này sẽ phát sinh ngắt FIFO
+    uint8_t fifo_mode;   // 0 = Stop when full, 1 = Overwrite
+    bool overrun_en; // true: phát hiện tràn FIFO, false: không phát hiện tràn FIFO
 } BMI160_FIFO_Config_t;
 
 // 1 frame dữ liệu FIFO (header mode) - cấu trúc dữ liệu để lưu trữ dữ liệu FIFO đã giải mã

@@ -210,13 +210,16 @@ BMI_Status BMI160_ReadTemperature(bmi_dev_t *dev, int16_t *temp) {
 //  ================================  các hàm FIFO  ================================
 
 BMI_Status BMI160_FIFO_Config(bmi_dev_t *dev, const BMI160_FIFO_Config_t *fifo_cfg) {
-    if (dev == NULL || dev->handle_i2c == NULL || fifo_cfg == NULL) return BMI_ERROR;
+    if (dev == NULL || dev->handle_i2c == NULL || fifo_cfg == NULL) 
+        return BMI_ERROR;
 
-    // FIFO_CONFIG[0] (0x46) chỉ chứa fifo_water_mark<7:0>, đơn vị 4 byte
-    BMI_Status status = BMI_Write_Reg(dev, BMI_FIFO_CONFIG_0, fifo_cfg->watermark);
+    BMI_Status status;
+
+    // FIFO_CONFIG_0: Watermark
+    status = BMI_Write_Reg(dev, BMI_FIFO_CONFIG_0, fifo_cfg->watermark);
     if (status != BMI_OK) return status;
 
-    // FIFO_CONFIG[1] (0x47): gyr_en | acc_en | mag_en | header_en | tag_int1 | tag_int2 | time_en | reserved
+    // FIFO_CONFIG_1: acc, gyr, header, time
     uint8_t cfg1 = 0;
     if (fifo_cfg->gyr_en)    cfg1 |= BMI_FIFO_GYR_EN_MASK;
     if (fifo_cfg->acc_en)    cfg1 |= BMI_FIFO_ACC_EN_MASK;
@@ -226,10 +229,26 @@ BMI_Status BMI160_FIFO_Config(bmi_dev_t *dev, const BMI160_FIFO_Config_t *fifo_c
     status = BMI_Write_Reg(dev, BMI_FIFO_CONFIG_1, cfg1);
     if (status != BMI_OK) return status;
 
-    // Lưu lại cấu hình để hàm parse sau này biết cách giải mã buffer (header hay headerless)
+    // === CẤU HÌNH OVERWRITE MODE (Thanh ghi 0x45) ===
+    uint8_t downs_cfg = 0x00;
+    
+    // Bit 1: FIFO Mode (1 = Overwrite)
+    if (fifo_cfg->fifo_mode == BMI160_FIFO_MODE_OVERWRITE) {
+        downs_cfg |= (1 << 1);
+    }
+    
+    // Bit 0: Overrun enable (thường bật cùng overwrite)
+    if (fifo_cfg->overrun_en) {
+        downs_cfg |= (1 << 0);
+    }
+
+    status = BMI_Write_Reg(dev, BMI_FIFO_DOWNSAMPLE, downs_cfg);
+    if (status != BMI_OK) return status;
+
+    // Lưu cấu hình
     dev->fifo_config = *fifo_cfg;
 
-    // Đổi cấu hình FIFO nên đi kèm flush để tránh lẫn dữ liệu cũ với format mới
+    // Flush FIFO sau khi thay đổi mode
     return BMI160_FIFO_Flush(dev);
 }
 
