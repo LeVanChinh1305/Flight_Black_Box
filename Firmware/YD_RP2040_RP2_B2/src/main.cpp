@@ -15,7 +15,6 @@
 // ================Định nghĩa mức độ ưu tiên (Priority) cho các Task trong FreeRTOS==============
 #define PRIORITY_TASK_BMI160 (tskIDLE_PRIORITY + 3)
 #define PRIORITY_TASK_GPS (tskIDLE_PRIORITY + 2)
-#define PRIORITY_TASK_MQTT (tskIDLE_PRIORITY + 1)
 
 // ================     Tài nguyên dùng chung (mutex...)   ==============
 static SemaphoreHandle_t g_mutex_gps_data = NULL; // mutex bảo vệ dữ liệu GPS (g_gps_data) khi được truy cập bởi nhiều task
@@ -92,13 +91,13 @@ static void TaskBMI160(void *pvParameters) {
         }
 
         TickType_t now = xTaskGetTickCount();
-        printf("[TaskBMI160] thoi gian hien tai = %u ms, ", (unsigned int)(now * portTICK_PERIOD_MS));
-        printf("[TaskBMI160] Thoi gian doc FIFO: %u ms\n", (unsigned int)(now - lastWake) * portTICK_PERIOD_MS);
+        // printf("[TaskBMI160] thoi gian hien tai = %u ms, ", (unsigned int)(now * portTICK_PERIOD_MS));
+        // printf("[TaskBMI160] Thoi gian doc FIFO: %u ms\n", (unsigned int)(now - lastWake) * portTICK_PERIOD_MS);
         
-        // printf(" [TaskBMI160] frames=%u Acc(%.3f,%.3f,%.3f)g |%.3f|g Gyro(%.2f,%.2f,%.2f)dps\n",
-        //       result.frame_count, 
-        //       phys.acc_x_g, phys.acc_y_g, phys.acc_z_g, phys.acc_magnitude_g, 
-        //       phys.gyr_x_dps, phys.gyr_y_dps, phys.gyr_z_dps);
+        printf(" [TaskBMI160] frames=%u Acc(%.3f,%.3f,%.3f)g |%.3f|g Gyro(%.2f,%.2f,%.2f)dps\n",
+              result.frame_count, 
+              phys.acc_x_g, phys.acc_y_g, phys.acc_z_g, phys.acc_magnitude_g, 
+              phys.gyr_x_dps, phys.gyr_y_dps, phys.gyr_z_dps);
     }
     } else if (status != BMI_OK) {
       printf("[TaskBMI160] Loi doc FIFO!\n");
@@ -113,7 +112,25 @@ static void TaskBMI160(void *pvParameters) {
 #define GPS_TASK_STACK_SIZE 1024 // word (4 byte/word tren RP2040)
 #define GPS_MUTEX_WAIT_MS 50 // thoi gian toi da cho mutex khi cap nhat/doc du lieu
 
-// Đã bỏ các define chu kỳ cũ vì chúng ta sẽ quét liên tục
+// ----------------------------------------------------------------
+// BẬT/TẮT chế độ giả lập GPS (không cần phần cứng, không cần tín hiệu vệ tinh)
+// Khi ở trong nhà hoặc muốn test: giữ nguyên dòng dưới
+// Khi dùng phần cứng thật ngoài trời:  comment dòng dưới lại
+// ----------------------------------------------------------------
+#define GPS_SIMULATE
+
+#ifdef GPS_SIMULATE
+// Tọa độ gốc giả lập (Hà Nội - Hoàn Kiếm)
+#define GPS_SIM_LAT_BASE    21.028511f
+#define GPS_SIM_LON_BASE   105.834160f
+#define GPS_SIM_ALT_M       15.0f
+#define GPS_SIM_SPEED_KMH   12.5f
+#define GPS_SIM_SATELLITES  8
+// Mỗi chu kỳ vị trí dịch chuyển một lượng nhỏ để giả lập chuyển động
+#define GPS_SIM_LAT_STEP    0.000050f  // ~5.5 m mỗi giây về hướng Bắc
+#define GPS_SIM_LON_STEP    0.000045f  // ~4.5 m mỗi giây về hướng Đông
+#define GPS_SIM_PERIOD_MS   1000       // Gửi dữ liệu mỗi 1 giây (đúng như module thật)
+#endif // GPS_SIMULATE
 
 static neo6m_data_t g_gps_data;
 bool GPS_GetLastData(neo6m_data_t *out) {
@@ -133,6 +150,60 @@ bool GPS_GetLastData(neo6m_data_t *out) {
 static void TaskGPS(void *pvParameters) {
   (void)pvParameters;
 
+#ifdef GPS_SIMULATE
+    // ---- Chế độ giả lập: không khởi tạo UART, không cần tín hiệu vệ tinh ----
+    printf("[TaskGPS] Che do GIA LAP GPS (GPS_SIMULATE bat). Khong can phan cung.\n");
+
+    static neo6m_data_t sim = {
+        .latitude    = GPS_SIM_LAT_BASE,
+        .longitude   = GPS_SIM_LON_BASE,
+        .altitude_m  = GPS_SIM_ALT_M,
+        .fix_quality = NEO6M_FIX_GPS,
+        .satellites  = GPS_SIM_SATELLITES,
+        .hdop        = 1.2f,
+        .speed_knots = GPS_SIM_SPEED_KMH / 1.852f,
+        .speed_kmh   = GPS_SIM_SPEED_KMH,
+        .course_deg  = 45.0f,
+        .hour        = 7,
+        .minute      = 0,
+        .second      = 0,
+        .day         = 9,
+        .month       = 7,
+        .year        = 2025,
+        .is_valid    = true,
+    };
+
+    TickType_t lastWake = xTaskGetTickCount();
+    for (;;) {
+        // Cập nhật thời gian giả (tăng 1 giây mỗi chu kỳ)
+        sim.second++;
+        if (sim.second >= 60) { sim.second = 0; sim.minute++; }
+        if (sim.minute >= 60) { sim.minute = 0; sim.hour++;   }
+        if (sim.hour   >= 24) { sim.hour   = 0; }
+
+        // Dịch chuyển tọa độ nhỏ để giả lập chuyển động
+        sim.latitude  += GPS_SIM_LAT_STEP;
+        sim.longitude += GPS_SIM_LON_STEP;
+
+        // Ghi vào biến toàn cục (bảo vệ bằng mutex)
+        if (xSemaphoreTake(g_mutex_gps_data, pdMS_TO_TICKS(GPS_MUTEX_WAIT_MS)) == pdTRUE) {
+            g_gps_data = sim;
+            xSemaphoreGive(g_mutex_gps_data);
+        }
+
+        TickType_t now = xTaskGetTickCount();
+        printf("[TaskGPS][SIM] t=%ums Fix OK - vido=%.6f kinhdo=%.6f docao=%.1fm sat=%u tocdo=%.1fkm/h %02u:%02u:%02u\n",
+               (unsigned int)(now * portTICK_PERIOD_MS),
+               sim.latitude, sim.longitude, sim.altitude_m,
+               (unsigned int)sim.satellites, sim.speed_kmh,
+               (unsigned int)sim.hour, (unsigned int)sim.minute, (unsigned int)sim.second);
+
+        // Delay chính xác đến chu kỳ tiếp theo (1 giây)
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(GPS_SIM_PERIOD_MS));
+    }
+
+#else
+    // ---- Chế độ thực: đọc dữ liệu từ module NEO-6M qua UART ----
     neo6m_dev_t gps_dev;
 
     while (NEO6M_Init(&gps_dev, NEO6M_UART_PORT, NEO6M_PIN_TX, NEO6M_PIN_RX, NEO6M_BAUDRATE) != NEO6M_OK) {
@@ -144,7 +215,6 @@ static void TaskGPS(void *pvParameters) {
     for (;;) {
         static neo6m_data_t tmp = {0};
 
-        // Ghi thời điểm bắt đầu ĐỌC để đo tổng thời gian từ lúc bắt đầu tới lúc xác định xong
         TickType_t t_start = xTaskGetTickCount();
 
         if (NEO6M_ReadLine(&gps_dev) == NEO6M_OK) {
@@ -162,12 +232,11 @@ static void TaskGPS(void *pvParameters) {
             TickType_t t_parse_done = xTaskGetTickCount();
             uint32_t parse_ms = (t_parse_done - t_read_done) * portTICK_PERIOD_MS;
 
-            // In đoạn chữ nhận được, thời gian đọc, thời gian parse và kết quả nhận dạng
             printf("[TaskGPS] doc=%ums parse=%ums [%s] -> %s\n",
                    (unsigned int)read_ms,
                    (unsigned int)parse_ms,
                    gps_dev.nmea_buf,
-                   parsed ? "OK" : "BỎ QUA");
+                   parsed ? "OK" : "BO QUA");
 
             if (parsed) {
                 if (xSemaphoreTake(g_mutex_gps_data, pdMS_TO_TICKS(GPS_MUTEX_WAIT_MS)) == pdTRUE) {
@@ -189,6 +258,7 @@ static void TaskGPS(void *pvParameters) {
             }
         }
     }
+#endif // GPS_SIMULATE
 }
 // ================   TASK: MQTT            ========
 // nhiệm vụ : 
@@ -196,8 +266,7 @@ static void TaskGPS(void *pvParameters) {
 // 2. kết nối MQTT (nếu chưa kết nối)
 // 3. lấy dữ liệu GPS và BMI160 từ các biến toàn cục được bảo vệ bởi mutex
 // 4. gửi dữ liệu GPS và BMI160 lên server MQTT
-#define GPS_MQTT_TASK_STACK_SIZE 1024
-#define GPS_MQTT_TASK_PERIOD_MS 1000 // chu kỳ gửi dữ liệu lên MQTT
+
 
 
 // ================   HOOK BAT BUOC CUA FREERTOS            ========

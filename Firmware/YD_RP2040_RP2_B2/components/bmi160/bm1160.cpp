@@ -127,18 +127,48 @@ BMI_Status BMI160_Init(bmi_dev_t *dev, i2c_inst_t *handle_i2c, uint8_t i2c_addr,
 
     vTaskDelay(pdMS_TO_TICKS(10)); // cho nguon on dinh
 
-    // reset chip 
-    BMI160_SendCommand(dev, BMI_CMD_SOFT_RESET);
-    vTaskDelay(pdMS_TO_TICKS(15)); // can delay it nhat 15ms sau khi reset theo Datasheet
+    printf("[BMI160] Dang ket noi I2C addr=0x%02X (SDA=GPIO%u, SCL=GPIO%u)...\n",
+           (unsigned int)i2c_addr, (unsigned int)BMI160_PIN_SDA, (unsigned int)BMI160_PIN_SCL);
 
-    // Đọc thử để chip ổn định lại giao tiếp sau Reset
+    // Doc CHIP_ID truoc khi reset de kiem tra bus da hoat dong chua
+    uint8_t pre_id = 0;
+    if (BMI160_ReadID(dev, &pre_id) != BMI_OK) {
+        printf("[BMI160] Loi: Khong nhan duoc phan hoi I2C. Kiem tra day cap SDA/SCL va dia chi 0x%02X!\n",
+               (unsigned int)i2c_addr);
+        return BMI_ERROR;
+    }
+    printf("[BMI160] CHIP_ID doc truoc reset: 0x%02X (mong doi: 0x%02X)\n",
+           (unsigned int)pre_id, (unsigned int)BMI_CHIPID_VALUE);
+
+    // Soft reset chip
+    BMI160_SendCommand(dev, BMI_CMD_SOFT_RESET);
+    // Datasheet: chip can ~80ms de khoi dong lai hoan toan sau reset
+    // (15ms chi la startup time cho ACC, Gyro can den 80ms)
+    vTaskDelay(pdMS_TO_TICKS(80));
+
+    // Doc dummy de chip on dinh giao tiep I2C sau reset
     uint8_t temp_id = 0;
     BMI160_ReadID(dev, &temp_id);
-    vTaskDelay(pdMS_TO_TICKS(2));
+    vTaskDelay(pdMS_TO_TICKS(5));
 
-    // kiểm tra id 
-    if (BMI160_CheckConnection(dev) != BMI_OK) {
-        printf("[BMI160] Loi: CHIP_ID khong khop hoac khong tim thay thiet bi I2C!\n");
+    // Kiem tra CHIP_ID sau reset
+    uint8_t chip_id = 0;
+    if (BMI160_ReadID(dev, &chip_id) != BMI_OK) {
+        printf("[BMI160] Loi: Mat ket noi I2C sau soft reset!\n");
+        return BMI_ERROR;
+    }
+    printf("[BMI160] CHIP_ID sau reset: 0x%02X (mong doi: 0x%02X)\n",
+           (unsigned int)chip_id, (unsigned int)BMI_CHIPID_VALUE);
+
+    if (chip_id != BMI_CHIPID_VALUE) {
+        if (chip_id == 0x00 || chip_id == 0xFF) {
+            printf("[BMI160] Loi: CHIP_ID=0x%02X -> Khong co phan hoi hoac bus bi loi (pull-up?).\n",
+                   (unsigned int)chip_id);
+        } else {
+            printf("[BMI160] Loi: CHIP_ID=0x%02X KHONG khop (mong doi 0x%02X). Co the la SA0 sai (thu addr 0x%02X) hoac chip gia.\n",
+                   (unsigned int)chip_id, (unsigned int)BMI_CHIPID_VALUE,
+                   (unsigned int)(i2c_addr == 0x68 ? 0x69 : 0x68));
+        }
         return BMI_ERROR;
     }
     printf("[BMI160] Ket noi I2C OK.\n");
