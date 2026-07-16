@@ -42,10 +42,10 @@ extern "C" {
 #define SDCARD_CMD58   58  // READ_OCR
 #define SDCARD_ACMD41  41  // SD_SEND_OP_COND (gửi sau CMD55)
 
-// --------------------cấu hình vùng "file log" giả lập (vì chưa tích hợp FAT32/FatFs) -------------------
+// --------------------cấu hình vùng "file log" giả lập ghi trực tiếp vào Raw Block -------------------
 // Đây KHÔNG phải file thật theo nghĩa hệ điều hành (Windows sẽ không thấy nó), mà là 1 vùng
-// block cố định trên thẻ được quản lý thủ công như 1 file ghi-tuần-tự (sequential log) đơn giản,
-// đủ để test ghi/đọc/xoá định kỳ mà không cần thư viện FAT ngoài.
+// block cố định trên thẻ được quản lý thủ công như 1 file ghi-tuần-tự (sequential log) đơn giản.
+// Cấu trúc này hữu ích để test ghi/đọc/xoá mức phần cứng song song với FatFs.
 #define SDLOG_HEADER_BLOCK      20000              // block chứa header (magic + số bản ghi)
 #define SDLOG_DATA_START_BLOCK  (SDLOG_HEADER_BLOCK + 1) // block đầu tiên chứa dữ liệu
 #define SDLOG_DATA_BLOCK_COUNT  50                 // 50 block = 25600 byte vùng chứa dữ liệu
@@ -100,9 +100,9 @@ SD_Status SDCARD_WriteBlock(sd_dev_t *dev, uint32_t block_addr, const uint8_t *b
 // Đây là dung lượng THẬT của toàn bộ thẻ (không phụ thuộc filesystem).
 SD_Status SDCARD_GetCapacityBytes(sd_dev_t *dev, uint64_t *total_bytes);
 
-// --------------------API "file log" giả lập (ghi tuần tự, không cần FAT32)-------------------
+// --------------------API "file log" giả lập mức Raw Block (ghi tuần tự)-------------------
 // Lưu ý: đây là vùng dữ liệu riêng do driver tự quản lý (không phải file .csv chuẩn hệ điều hành).
-// Phù hợp để test ghi/đọc/xoá định kỳ; nếu cần file .csv thật mở được trên PC, phải tích hợp FatFs.
+// Phù hợp để test ghi/đọc/xoá định kỳ; để quản lý file .csv thật mở được trên PC, hãy sử dụng thư viện FatFs (thư mục fatfs/).
 
 // Tạo (hoặc reset) file log: ghi header với số bản ghi = 0.
 SD_Status SDLOG_Create(sd_dev_t *dev);

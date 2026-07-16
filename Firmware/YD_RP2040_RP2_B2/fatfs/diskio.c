@@ -5,6 +5,7 @@
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include "components/sdcard/sdcard.h"
+#include "components/xpt2046/xpt2046.h"  // can de deselect chan CS cua XPT2046 (dung chung bus SPI0)
 #include "hardware/gpio.h"
 #include <stdio.h>
 
@@ -26,6 +27,18 @@ DSTATUS disk_initialize(BYTE pdrv)
     gpio_set_function(SDCARD_PIN_MOSI, GPIO_FUNC_SPI);
     gpio_set_function(SDCARD_PIN_SCK,  GPIO_FUNC_SPI);
     spi_init(SDCARD_SPI_PORT, SDCARD_BAUD_INIT);
+
+    /* QUAN TRONG: XPT2046 (cam ung) dung CHUNG bus SPI0 (MISO/MOSI/SCK) voi
+       the SD, chi khac chan CS rieng (GPIO17). Neu chua co task nao goi
+       XPT2046_Init() (vd build hien tai chi test rieng SD/GPS/BMI160), chan
+       CS nay bi THA NOI -> IC XPT2046 co the ngau nhien tuong minh dang duoc
+       chon va tu y lai tin hieu ra MISO cung luc voi the SD, gay xung dot bus
+       (loi doc du lieu SAI NGAU NHIEN, luc duoc luc khong - dung trieu chung
+       da gap: CMD8/CMD16 luc pass luc fail). Ep CS cua XPT2046 len muc cao
+       (deselect) ngay tai day de dam bao no khong bao gio choi vao bus. */
+    gpio_init(XPT2046_PIN_CS);
+    gpio_set_dir(XPT2046_PIN_CS, GPIO_OUT);
+    gpio_put(XPT2046_PIN_CS, 1);
 
     SD_Status st = SDCARD_Init(&s_sd, SDCARD_SPI_PORT);
     s_ready = (st == SD_OK);

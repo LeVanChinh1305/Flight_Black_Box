@@ -11,6 +11,9 @@
 #include "my_mqtt.h"
 #include "neo6m.h"
 #include "sim7680.h"
+#include "sdcard.h"   // can cho kieu SD_Status (SD_OK / SD_ERROR) dung trong TaskSDCard
+#include "ff.h"       // FatFs: dung de tao/ghi file that (.csv) tren the SD
+#include <string.h>
 
 // ================Định nghĩa mức độ ưu tiên (Priority) cho các Task trong FreeRTOS==============
 #define PRIORITY_TASK_BMI160 (tskIDLE_PRIORITY + 3)
@@ -274,13 +277,149 @@ static void TaskGPS(void *pvParameters) {
 #define PRIORITY_TASK_SDCARD  (tskIDLE_PRIORITY + 1) // Độ ưu tiên thấp hơn IMU một chút
 #define SDCARD_TASK_STACK_SIZE 2048                  // FatFs cần stack lớn hơn (khoảng 2KB)
 #define SDCARD_WRITE_PERIOD_MS 1000                  // Ghi log định kỳ mỗi 1 giây
+#define SDCARD_ROTATE_EVERY_N_CYCLES 60              // 60 chu kỳ (60 x 1s = 1 phút) -> tạo file mới
+#define SDCARD_MOUNT_RETRY_MS 1000                   // thời gian chờ giữa các lần thử mount lại
 
-// Định nghĩa file lưu trữ dữ liệu log
-#define LOG_FILE_NAME "blackbox.csv"
+// FatFs chỉ hỗ trợ tên file kiểu 8.3 trong cấu hình hiện tại (FF_USE_LFN = 0 trong ffconf.h),
+// nên KHÔNG thể đặt tên dài kiểu "log_2026-07-16_14-35-00.csv". Ta nén thời gian vào 6 số:
+// - Nếu GPS đã có fix hợp lệ: DDHHMM.CSV (ngày-giờ-phút UTC lấy từ vệ tinh)
+// - Nếu GPS CHƯA có fix (vd mới bật máy, chưa bắt được vệ tinh): dùng số phút kể từ lúc
+//   boot, tiền tố "B" để phân biệt với tên theo giờ GPS -> B000001.CSV, B000002.CSV, ...
+#define SDLOG_FILENAME_MAXLEN 13   // "8 ky tu" + "." + "3 ky tu" + '\0'
 
+static FATFS g_fatfs;              // đối tượng filesystem của FatFs (bắt buộc phải "sống" suốt thời gian mount)
+static FIL   g_sdlog_file;         // handle của file log đang mở
+static bool  g_sdlog_file_open = false;
+static char  g_sdlog_current_name[SDLOG_FILENAME_MAXLEN] = {0}; // ten file dang mo (de log khi dong)
+static uint32_t g_sdlog_record_count = 0;                        // so dong da ghi vao file HIEN TAI (reset khi mo file moi)
 
+// Dựng tên file 8.3 dựa trên thời gian GPS (nếu có fix) hoặc số phút từ lúc khởi động (fallback)
+static void SDLog_BuildFileName(char *out, size_t out_len,
+                                 const neo6m_data_t *gps, uint32_t uptime_min) {
+  if (gps->is_valid) {
+    snprintf(out, out_len, "%02u%02u%02u.CSV",
+              (unsigned)gps->day, (unsigned)gps->hour, (unsigned)gps->minute);
+  } else {
+    snprintf(out, out_len, "B%06lu.CSV", (unsigned long)(uptime_min % 1000000UL));
+  }
+}
+
+// Đóng file cũ (nếu có) và mở file mới để ghi, kèm dòng tiêu đề CSV.
+// In log DEBUG ro rang o ca 2 thoi diem: luc dong file cu (tong ket) va luc mo file moi (xac nhan).
+static SD_Status SDLog_OpenNewFile(const char *filename) {
+  if (g_sdlog_file_open) {
+    FSIZE_t size_before_close = f_size(&g_sdlog_file);
+    f_close(&g_sdlog_file);
+    g_sdlog_file_open = false;
+    printf("[TaskSDCard][DEBUG] Da dong file '%s': %lu dong du lieu, %lu byte.\n",
+           g_sdlog_current_name, (unsigned long)g_sdlog_record_count, (unsigned long)size_before_close);
+  }
+
+  FRESULT fr = f_open(&g_sdlog_file, filename, FA_WRITE | FA_CREATE_ALWAYS);
+  if (fr != FR_OK) {
+    printf("[TaskSDCard][DEBUG] LOI f_open('%s') fr=%d -> KHONG mo duoc file moi!\n", filename, fr);
+    return SD_ERROR;
+  }
+  g_sdlog_file_open = true;
+  g_sdlog_record_count = 0;
+  strncpy(g_sdlog_current_name, filename, sizeof(g_sdlog_current_name) - 1);
+  g_sdlog_current_name[sizeof(g_sdlog_current_name) - 1] = '\0';
+
+  static const char header[] =
+      "time_s,acc_x_g,acc_y_g,acc_z_g,acc_mag_g,gyr_x_dps,gyr_y_dps,gyr_z_dps,"
+      "lat,lon,alt_m,speed_kmh,sat,fix\r\n";
+  UINT bw = 0;
+  FRESULT fw = f_write(&g_sdlog_file, header, sizeof(header) - 1, &bw);
+  f_sync(&g_sdlog_file);
+
+  printf("[TaskSDCard][DEBUG] >>> Da MO file log MOI: '%s' (header %u/%u byte, fw=%d)\n",
+         filename, (unsigned)bw, (unsigned)(sizeof(header) - 1), fw);
+  return SD_OK;
+}
+
+static void TaskSDCard(void *pvParameters) {
+  (void)pvParameters;
+  printf("[TaskSDCard] Khoi tao FatFs...\n");
+
+  // B1: mount filesystem. f_mount() se goi disk_initialize() -> SDCARD_Init() ben trong.
+  // Neu chua nhan the/loi phan cung, thu lai dinh ky thay vi treo chuong trinh.
+  FRESULT fr;
+  while ((fr = f_mount(&g_fatfs, "", 1)) != FR_OK) {
+    printf("[TaskSDCard] Mount FAT that bai (fr=%d), thu lai...\n", fr);
+    vTaskDelay(pdMS_TO_TICKS(SDCARD_MOUNT_RETRY_MS));
+  }
+  printf("[TaskSDCard] Mount FAT thanh cong.\n");
+
+  uint32_t cycle_count = 0;   // dem so chu ky 1 giay da chay, dung de biet khi nao sang phut moi
+  uint32_t elapsed_s = 0;     // tong so giay ke tu luc task bat dau (dung lam cot "time_s" trong CSV)
+  char filename[SDLOG_FILENAME_MAXLEN];
+
+  TickType_t lastWake = xTaskGetTickCount();
+  for (;;) {
+    // B2: lay du lieu MOI NHAT tu 2 task kia. Dung ham Getter co san (co mutex ben trong),
+    // KHONG duoc truy cap truc tiep g_bmi_data / g_gps_data tu day de tranh dua du lieu (race condition).
+    BMI160_Physical_t bmi = {0};
+    neo6m_data_t gps = {0};
+    bool has_bmi = BMI160_GetLastData(&bmi);
+    bool has_gps = GPS_GetLastData(&gps);
+
+    // B3: cu moi 60 chu ky (~60 giay = 1 phut) thi dong file cu, tao file moi.
+    // Dieu kien cycle_count == 0 dam bao file dau tien duoc tao ngay khi vao vong lap.
+    if (cycle_count % SDCARD_ROTATE_EVERY_N_CYCLES == 0) {
+      printf("[TaskSDCard][DEBUG] Toi han xoay file (elapsed=%lus, phut thu %lu) -> tao file moi...\n",
+             (unsigned long)elapsed_s, (unsigned long)(elapsed_s / 60));
+      SDLog_BuildFileName(filename, sizeof(filename), &gps, elapsed_s / 60);
+      SDLog_OpenNewFile(filename); // ham nay tu in log ca luc thanh cong lan that bai (xem SDLog_OpenNewFile)
+    }
+
+    // B4: ghi 1 dong du lieu (moi giay 1 dong) vao file dang mo.
+    if (g_sdlog_file_open) {
+      char line[160];
+      int len = snprintf(line, sizeof(line),
+          "%lu,%.3f,%.3f,%.3f,%.3f,%.2f,%.2f,%.2f,%.6f,%.6f,%.1f,%.1f,%u,%d\r\n",
+          (unsigned long)elapsed_s,
+          has_bmi ? bmi.acc_x_g : 0.0f, has_bmi ? bmi.acc_y_g : 0.0f,
+          has_bmi ? bmi.acc_z_g : 0.0f, has_bmi ? bmi.acc_magnitude_g : 0.0f,
+          has_bmi ? bmi.gyr_x_dps : 0.0f, has_bmi ? bmi.gyr_y_dps : 0.0f,
+          has_bmi ? bmi.gyr_z_dps : 0.0f,
+          has_gps ? gps.latitude : 0.0f, has_gps ? gps.longitude : 0.0f,
+          has_gps ? gps.altitude_m : 0.0f, has_gps ? gps.speed_kmh : 0.0f,
+          has_gps ? (unsigned)gps.satellites : 0u,
+          has_gps ? (int)gps.fix_quality : -1);
+
+      UINT bw = 0;
+      FRESULT wr = f_write(&g_sdlog_file, line, (UINT)len, &bw);
+      if (wr != FR_OK || bw != (UINT)len) {
+        printf("[TaskSDCard][DEBUG] LOI ghi file '%s'! fr=%d (bw=%u/%d)\n",
+               g_sdlog_current_name, wr, (unsigned)bw, len);
+      } else {
+        // f_sync ghi thang xuong the ngay (khong doi buffer day), giup du lieu khong bi mat
+        // neu mat dien dot ngot -- danh doi la ton hao mon the hon so voi ghi gom (batch).
+        f_sync(&g_sdlog_file);
+        g_sdlog_record_count++;
+        // KHONG log moi giay o day nua (qua on ao) -- so dong ghi duoc se duoc
+        // tong ket 1 lan khi dong file, xem SDLog_OpenNewFile().
+      }
+    }
+
+    cycle_count++;
+    elapsed_s++;
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SDCARD_WRITE_PERIOD_MS));
+  }
+}
 
 // ================   HOOK BAT BUOC CUA FREERTOS            ========
+extern "C" void vApplicationMallocFailedHook(void) {
+  // Duoc goi khi pvPortMalloc() het heap (vd: khong du bo nho de tao task/queue/mutex).
+  // In ra loi RO RANG thay vi de chuong trinh "treo im lang" nhu truoc day, giup
+  // debug nhanh hon neu sau nay them task/bien moi lam vuot configTOTAL_HEAP_SIZE.
+  printf("!!! LOI: FreeRTOS het HEAP (pvPortMalloc that bai)! Hay tang configTOTAL_HEAP_SIZE. !!!\n");
+  taskDISABLE_INTERRUPTS();
+  for (;;) {
+    tight_loop_contents();
+  }
+}
+
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask,
                                               char *pcTaskName) {
   (void)xTask;
@@ -332,7 +471,7 @@ int main() {
     NULL,  
     PRIORITY_TASK_SDCARD, 
     NULL
-  )
+  );
 
   if (ok_BMI160 != pdPASS || ok_GPS != pdPASS  || ok_SDCARD != pdPASS) {
     printf("Loi: khong the tao task!\n");

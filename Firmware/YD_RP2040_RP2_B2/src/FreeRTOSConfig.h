@@ -40,7 +40,11 @@
 /* ====================== Bộ nhớ ====================== */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
-#define configTOTAL_HEAP_SIZE                   (20 * 1024) // 20KB Heap cho FreeRTOS
+#define configTOTAL_HEAP_SIZE                   (48 * 1024) // 48KB Heap cho FreeRTOS
+// (Tăng tu 20KB len 48KB: tong stack cac task + timer task + idle task hien
+//  da ~21.5KB, gan sat/vuot 20KB cu -> cap phat that bai am tham trong luc
+//  vTaskStartScheduler() khoi tao idle/timer task, khien chuong trinh "treo im
+//  lang" ngay sau dong printf dau tien ma khong co task nao chay duoc.)
 
 /* ====================== Hook functions ======================
  * BẮT BUỘC phải định nghĩa, nếu không FreeRTOS.h báo lỗi #error.
@@ -49,7 +53,7 @@
 #define configUSE_IDLE_HOOK                     0
 #define configUSE_TICK_HOOK                     0
 #define configCHECK_FOR_STACK_OVERFLOW          2   // bật kiểm tra tràn stack (hữu ích khi debug)
-#define configUSE_MALLOC_FAILED_HOOK            0
+#define configUSE_MALLOC_FAILED_HOOK            1   // bat hook bao loi het heap thay vi treo im lang
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 
 /* ====================== Thống kê runtime (tắt để tiết kiệm bộ nhớ) ====================== */

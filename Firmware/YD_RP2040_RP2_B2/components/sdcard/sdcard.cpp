@@ -5,7 +5,7 @@
 // =====================================================================================
 //  Driver thẻ nhớ SD - giao thức SPI mode (giống code mẫu chuẩn của hầu hết MCU 8/32-bit)
 //  Chỉ hỗ trợ thẻ SDv2 (SDSC/SDHC) - hầu hết thẻ microSD bán hiện nay đều là SDv2 trở lên.
-//  KHÔNG dùng FatFs - chỉ đọc/ghi block thô 512 byte để kiểm tra phần cứng.
+//  Bao gồm API đọc/ghi block thô phục vụ cả "File log" giả lập và thư viện FatFs (diskio.c).
 // =====================================================================================
 
 #define SD_INIT_RETRY        200    // số lần thử tối đa khi chờ ACMD41 thoát idle
@@ -335,7 +335,7 @@ SD_Status SDCARD_GetCapacityBytes(sd_dev_t *dev, uint64_t *total_bytes) {
 }
 
 // =====================================================================================
-//  "FILE LOG" GIẢ LẬP - GHI TUẦN TỰ TRÊN VÙNG BLOCK RIÊNG (KHÔNG CẦN FAT32)
+//  "FILE LOG" GIẢ LẬP - GHI TUẦN TỰ TRÊN VÙNG BLOCK RIÊNG (RAW BLOCK)
 //  Cấu trúc:
 //   - Block header (SDLOG_HEADER_BLOCK): 4 byte magic + 4 byte record_count, còn lại bỏ trống.
 //   - Block dữ liệu (từ SDLOG_DATA_START_BLOCK): mỗi block chứa 16 bản ghi x 32 byte.
