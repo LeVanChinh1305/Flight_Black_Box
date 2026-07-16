@@ -15,6 +15,9 @@
 #include "ff.h"       // FatFs: dung de tao/ghi file that (.csv) tren the SD
 #include <string.h>
 
+#include "tft.h"
+#include "xpt2046.h"
+
 // ================Định nghĩa mức độ ưu tiên (Priority) cho các Task trong FreeRTOS==============
 #define PRIORITY_TASK_BMI160 (tskIDLE_PRIORITY + 3)
 #define PRIORITY_TASK_GPS (tskIDLE_PRIORITY + 2)
@@ -22,6 +25,7 @@
 // ================     Tài nguyên dùng chung (mutex...)   ==============
 static SemaphoreHandle_t g_mutex_gps_data = NULL; // mutex bảo vệ dữ liệu GPS (g_gps_data) khi được truy cập bởi nhiều task
 static SemaphoreHandle_t g_mutex_bmi_data = NULL; // mutex bảo vệ dữ liệu BMI160 (g_bmi_data) khi được truy cập bởi nhiều task
+static SemaphoreHandle_t g_mutex_spi0 = NULL;     // mutex bảo vệ bus SPI0 (SDCard + XPT2046)
 
 // ================          TASK: BMI160 (IMU)            ==============
 #define BMI160_TASK_STACK_SIZE 1024     // Cấp phát kích thước vùng nhớ Stack cho task
@@ -307,6 +311,7 @@ static void SDLog_BuildFileName(char *out, size_t out_len,
 // Đóng file cũ (nếu có) và mở file mới để ghi, kèm dòng tiêu đề CSV.
 // In log DEBUG ro rang o ca 2 thoi diem: luc dong file cu (tong ket) va luc mo file moi (xac nhan).
 static SD_Status SDLog_OpenNewFile(const char *filename) {
+  if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
   if (g_sdlog_file_open) {
     FSIZE_t size_before_close = f_size(&g_sdlog_file);
     f_close(&g_sdlog_file);
@@ -317,6 +322,7 @@ static SD_Status SDLog_OpenNewFile(const char *filename) {
 
   FRESULT fr = f_open(&g_sdlog_file, filename, FA_WRITE | FA_CREATE_ALWAYS);
   if (fr != FR_OK) {
+    if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
     printf("[TaskSDCard][DEBUG] LOI f_open('%s') fr=%d -> KHONG mo duoc file moi!\n", filename, fr);
     return SD_ERROR;
   }
@@ -331,6 +337,7 @@ static SD_Status SDLog_OpenNewFile(const char *filename) {
   UINT bw = 0;
   FRESULT fw = f_write(&g_sdlog_file, header, sizeof(header) - 1, &bw);
   f_sync(&g_sdlog_file);
+  if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
 
   printf("[TaskSDCard][DEBUG] >>> Da MO file log MOI: '%s' (header %u/%u byte, fw=%d)\n",
          filename, (unsigned)bw, (unsigned)(sizeof(header) - 1), fw);
@@ -344,10 +351,14 @@ static void TaskSDCard(void *pvParameters) {
   // B1: mount filesystem. f_mount() se goi disk_initialize() -> SDCARD_Init() ben trong.
   // Neu chua nhan the/loi phan cung, thu lai dinh ky thay vi treo chuong trinh.
   FRESULT fr;
+  if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
   while ((fr = f_mount(&g_fatfs, "", 1)) != FR_OK) {
+    if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
     printf("[TaskSDCard] Mount FAT that bai (fr=%d), thu lai...\n", fr);
     vTaskDelay(pdMS_TO_TICKS(SDCARD_MOUNT_RETRY_MS));
+    if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
   }
+  if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
   printf("[TaskSDCard] Mount FAT thanh cong.\n");
 
   uint32_t cycle_count = 0;   // dem so chu ky 1 giay da chay, dung de biet khi nao sang phut moi
@@ -388,8 +399,10 @@ static void TaskSDCard(void *pvParameters) {
           has_gps ? (int)gps.fix_quality : -1);
 
       UINT bw = 0;
+      if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
       FRESULT wr = f_write(&g_sdlog_file, line, (UINT)len, &bw);
       if (wr != FR_OK || bw != (UINT)len) {
+        if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
         printf("[TaskSDCard][DEBUG] LOI ghi file '%s'! fr=%d (bw=%u/%d)\n",
                g_sdlog_current_name, wr, (unsigned)bw, len);
       } else {
@@ -397,6 +410,7 @@ static void TaskSDCard(void *pvParameters) {
         // neu mat dien dot ngot -- danh doi la ton hao mon the hon so voi ghi gom (batch).
         f_sync(&g_sdlog_file);
         g_sdlog_record_count++;
+        if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
         // KHONG log moi giay o day nua (qua on ao) -- so dong ghi duoc se duoc
         // tong ket 1 lan khi dong file, xem SDLog_OpenNewFile().
       }
@@ -406,6 +420,206 @@ static void TaskSDCard(void *pvParameters) {
     elapsed_s++;
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SDCARD_WRITE_PERIOD_MS));
   }
+}
+
+// ================          TASK: UI (TFT & XPT)         ==============
+#define UI_TASK_STACK_SIZE 2048
+#define UI_UPDATE_PERIOD_MS 100
+
+static tft_dev_t g_tft;
+static xpt2046_dev_t g_touch;
+static int g_current_page = 1;
+
+static void UI_DrawTopBar_Static(void) {
+    TFT_FillRect(&g_tft, 0, 0, TFT_WIDTH, 30, TFT_COLOR_BLUE);
+    TFT_DrawString(&g_tft, 5, 10, "SD", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
+    TFT_DrawString(&g_tft, 35, 10, "SIM:OK", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
+    TFT_DrawString(&g_tft, 190, 10, "[85%]", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
+}
+
+static void UI_DrawTopBar_Dynamic(void) {
+    neo6m_data_t gps;
+    if (GPS_GetLastData(&gps) && gps.is_valid) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%02u:%02u ", (unsigned)gps.hour, (unsigned)gps.minute);
+        TFT_DrawString(&g_tft, 100, 10, buf, TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
+    } else {
+        TFT_DrawString(&g_tft, 100, 10, "--:-- ", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
+    }
+}
+
+static void UI_DrawBottomTabs(void) {
+    TFT_FillRect(&g_tft, 0, TFT_HEIGHT - 50, TFT_WIDTH, 50, TFT_COLOR_BLACK);
+    
+    // Vien phan cach cac nut bam (dung FillRect de ve duong ke 2 pixel)
+    TFT_FillRect(&g_tft, 0, TFT_HEIGHT - 50, TFT_WIDTH, 2, TFT_COLOR_WHITE); // Ke ngang
+    TFT_FillRect(&g_tft, TFT_WIDTH / 3, TFT_HEIGHT - 50, 2, 50, TFT_COLOR_WHITE); // Ke doc 1
+    TFT_FillRect(&g_tft, 2 * TFT_WIDTH / 3, TFT_HEIGHT - 50, 2, 50, TFT_COLOR_WHITE); // Ke doc 2
+
+    uint16_t c1 = (g_current_page == 1) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
+    uint16_t c2 = (g_current_page == 2) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
+    uint16_t c3 = (g_current_page == 3) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
+
+    // Font size 2 de de doc, de bam
+    TFT_DrawString(&g_tft, 20, TFT_HEIGHT - 35, "GPS", c1, TFT_COLOR_BLACK, 2);
+    TFT_DrawString(&g_tft, 100, TFT_HEIGHT - 35, "IMU", c2, TFT_COLOR_BLACK, 2);
+    TFT_DrawString(&g_tft, 185, TFT_HEIGHT - 35, "SD", c3, TFT_COLOR_BLACK, 2);
+}
+
+static void UI_DrawPage1_Static(void) {
+    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
+    TFT_DrawString(&g_tft, 20, 40, "GPS (NEO-6M) INFO", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 80, "* LAT :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 100, "* LON :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 120, "* ALT :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 150, "* SPD :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 120, 150, "* HDG :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 180, "* TIME:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 200, "* SATS:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+}
+
+static void UI_DrawPage1_Dynamic(void) {
+    neo6m_data_t gps;
+    if (GPS_GetLastData(&gps)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "  %.6f N       ", gps.latitude);
+        TFT_DrawString(&g_tft, 60, 80, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), "  %.6f E       ", gps.longitude);
+        TFT_DrawString(&g_tft, 60, 100, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), "  %.1f m         ", gps.altitude_m);
+        TFT_DrawString(&g_tft, 60, 120, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), "%.1f km/h ", gps.speed_kmh);
+        TFT_DrawString(&g_tft, 60, 150, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+
+        snprintf(buf, sizeof(buf), "%.0f deg  ", gps.course_deg);
+        TFT_DrawString(&g_tft, 170, 150, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), "  %02u:%02u:%02u UTC   ", 
+                 (unsigned)gps.hour, (unsigned)gps.minute, (unsigned)gps.second);
+        TFT_DrawString(&g_tft, 60, 180, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+
+        snprintf(buf, sizeof(buf), "  %02u        ", (unsigned)gps.satellites);
+        TFT_DrawString(&g_tft, 60, 200, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+    }
+}
+
+static void UI_DrawPage2_Static(void) {
+    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
+    TFT_DrawString(&g_tft, 20, 40, "BMI160 IMU INFO", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 80, "* PITCH :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 100, "* ROLL  :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 120, "* G-MAG :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    
+    TFT_DrawString(&g_tft, 10, 160, "ACC (g) :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 180, "GYR(dps):", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+}
+
+static void UI_DrawPage2_Dynamic(void) {
+    BMI160_Physical_t bmi;
+    if (BMI160_GetLastData(&bmi)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), " %+6.1f deg    ", bmi.acc_y_g * 90.0f);
+        TFT_DrawString(&g_tft, 80, 80, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), " %+6.1f deg    ", bmi.acc_x_g * 90.0f);
+        TFT_DrawString(&g_tft, 80, 100, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), " %5.2f G      ", bmi.acc_magnitude_g);
+        TFT_DrawString(&g_tft, 80, 120, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+        
+        snprintf(buf, sizeof(buf), "X:%+.1f Y:%+.1f Z:%+.1f  ", bmi.acc_x_g, bmi.acc_y_g, bmi.acc_z_g);
+        TFT_DrawString(&g_tft, 80, 160, buf, TFT_COLOR_GREEN, TFT_COLOR_BLACK, 1);
+
+        snprintf(buf, sizeof(buf), "X:%+.0f Y:%+.0f Z:%+.0f  ", bmi.gyr_x_dps, bmi.gyr_y_dps, bmi.gyr_z_dps);
+        TFT_DrawString(&g_tft, 80, 180, buf, TFT_COLOR_GREEN, TFT_COLOR_BLACK, 1);
+    }
+}
+
+static void UI_DrawPage3_Static(void) {
+    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
+    TFT_DrawString(&g_tft, 40, 40, "STORAGE STATUS", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 70, "* SD CARD: DETECTED", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 90, "* FILE SYSTEM: FAT32", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 130, "* CAPACITY:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 150, "  [||||||||||||||||||.......]", TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 170, "  Used: 4.2 GB / Free: 11.8 GB", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    TFT_DrawString(&g_tft, 10, 210, "* STATUS:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+}
+
+static void UI_DrawPage3_Dynamic(void) {
+    static bool blink = false;
+    blink = !blink;
+    if (blink) {
+        TFT_DrawString(&g_tft, 10, 230, "  >> LOGGING...       ", TFT_COLOR_RED, TFT_COLOR_BLACK, 1);
+    } else {
+        TFT_DrawString(&g_tft, 10, 230, "  >> LOGGING...       ", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
+    }
+}
+
+static void TaskUI(void *pvParameters) {
+    (void)pvParameters;
+    
+    if (TFT_Init(&g_tft, TFT_SPI_PORT) != TFT_OK) {
+        printf("[TaskUI] TFT_Init that bai!\n");
+    }
+    
+    if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
+    if (XPT2046_Init(&g_touch, XPT2046_SPI_PORT) != XPT_OK) {
+        printf("[TaskUI] XPT2046_Init that bai!\n");
+    }
+    if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
+    
+    TFT_FillScreen(&g_tft, TFT_COLOR_BLACK);
+    UI_DrawTopBar_Static();
+    UI_DrawTopBar_Dynamic();
+    UI_DrawPage1_Static();
+    UI_DrawPage1_Dynamic();
+    UI_DrawBottomTabs();
+    
+    int last_page = g_current_page;
+    TickType_t lastWake = xTaskGetTickCount();
+    uint32_t redraw_counter = 0;
+    
+    for (;;) {
+        bool touched = false;
+        if (g_mutex_spi0 && xSemaphoreTake(g_mutex_spi0, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (XPT2046_Update(&g_touch) == XPT_OK) {
+                touched = g_touch.is_touched;
+            }
+            xSemaphoreGive(g_mutex_spi0);
+        }
+        
+        if (touched) {
+            if (g_touch.y > TFT_HEIGHT - 50) {
+                if (g_touch.x < TFT_WIDTH / 3) g_current_page = 1;
+                else if (g_touch.x < 2 * TFT_WIDTH / 3) g_current_page = 2;
+                else g_current_page = 3;
+            }
+        }
+        
+        bool page_changed = (g_current_page != last_page);
+        if (page_changed) {
+            if (g_current_page == 1) { UI_DrawPage1_Static(); UI_DrawPage1_Dynamic(); }
+            else if (g_current_page == 2) { UI_DrawPage2_Static(); UI_DrawPage2_Dynamic(); }
+            else if (g_current_page == 3) { UI_DrawPage3_Static(); UI_DrawPage3_Dynamic(); }
+            UI_DrawBottomTabs();
+            last_page = g_current_page;
+        } else {
+            redraw_counter++;
+            if (redraw_counter >= 10) {
+                redraw_counter = 0;
+                UI_DrawTopBar_Dynamic();
+                if (g_current_page == 1) UI_DrawPage1_Dynamic();
+                else if (g_current_page == 2) UI_DrawPage2_Dynamic();
+                else if (g_current_page == 3) UI_DrawPage3_Dynamic();
+            }
+        }
+        
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(UI_UPDATE_PERIOD_MS));
+    }
 }
 
 // ================   HOOK BAT BUOC CUA FREERTOS            ========
@@ -438,7 +652,8 @@ int main() {
   // Khoi tao tai nguyen dung chung TRUOC khi tao task su dung no
   g_mutex_gps_data = xSemaphoreCreateMutex();
   g_mutex_bmi_data = xSemaphoreCreateMutex();
-  if (g_mutex_gps_data == NULL || g_mutex_bmi_data == NULL) {
+  g_mutex_spi0 = xSemaphoreCreateMutex();
+  if (g_mutex_gps_data == NULL || g_mutex_bmi_data == NULL || g_mutex_spi0 == NULL) {
     printf("[main] Khong the tao mutex!\n");
     while (true) tight_loop_contents();
   }
@@ -472,8 +687,16 @@ int main() {
     PRIORITY_TASK_SDCARD, 
     NULL
   );
+  BaseType_t ok_UI = xTaskCreate(
+    TaskUI, 
+    "UI", 
+    2048, 
+    NULL,  
+    (tskIDLE_PRIORITY + 1), 
+    NULL
+  );
 
-  if (ok_BMI160 != pdPASS || ok_GPS != pdPASS  || ok_SDCARD != pdPASS) {
+  if (ok_BMI160 != pdPASS || ok_GPS != pdPASS || ok_SDCARD != pdPASS || ok_UI != pdPASS) {
     printf("Loi: khong the tao task!\n");
     while (true) { // nếu không thể tạo task, vòng lặp vô hạn để dừng chương trình
       tight_loop_contents(); 
