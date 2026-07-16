@@ -27,9 +27,9 @@ static SemaphoreHandle_t g_mutex_bmi_data = NULL; // mutex bảo vệ dữ liệ
 #define BMI160_FIFO_MAX_FRAMES 32       // số frame tối đa có thể đọc trong một lần đọc FIFO (tăng nếu muốn đọc nhiều frame hơn)
 #define BMI160_MUTEX_WAIT_MS 50         // Thời gian tối đa (50ms) mà một hàm chấp nhận "đứng đợi" để lấy được Mutex
 
-static BMI160_Physical_t g_bmi_data;
-static bool g_bmi_data_valid = false; // true kể từ khi có dữ liệu BMI160 hợp lệ đầu tiên, false nếu chưa có dữ liệu hợp lệ
-bool BMI160_GetLastData(BMI160_Physical_t *out) {
+static BMI160_Physical_t g_bmi_data;  // biến toàn cục lưu trữ dữ liệu vật lý (đơn vị g, dps) của cảm biến BMI160, được bảo vệ bởi mutex g_mutex_bmi_data
+static bool g_bmi_data_valid = false; // true kể từ khi có dữ liệu BMI160 hợp lệ đầu tiên, false nếu chưa có dữ liệu hợp lệ , dùng để kiểm tra xem dữ liệu BMI160 có hợp lệ hay không trước khi sử dụng
+bool BMI160_GetLastData(BMI160_Physical_t *out) { // hàm lấy dữ liệu BMI160 mới nhất, trả về true nếu có dữ liệu hợp lệ, false nếu không có dữ liệu hợp lệ
   if (out == NULL || g_mutex_bmi_data == NULL) return false;// nếu con trỏ đầu ra là NULL hoặc mutex chưa được khởi tạo, trả về false
 
   bool ok = false; 
@@ -43,30 +43,39 @@ bool BMI160_GetLastData(BMI160_Physical_t *out) {
   return ok;
 }
 static void TaskBMI160(void *pvParameters) {
-  (void)pvParameters; // 
+  (void)pvParameters; // tránh cảnh báo biến không được sử dụng
+  printf("[TaskBMI160] Khoi tao BMI160...\n");
 
+  //B1:  Khởi tạo cảm biến BMI160 với cấu hình mặc định, nếu khởi tạo thất bại, in ra thông báo lỗi và lặp lại sau 500ms
   bmi_dev_t bmi; // khai báo biến bmi với kiểu dữ liệu bmi_dev_t
   BMI160_Config_t config = { 
-    .accel_range = BMI_ACC_RANGE_4G,
-    .gyro_range = BMI_GYR_RANGE_500DPS,
-    .accel_odr = BMI_ACC_CONFIG_DEFAULT, // 100Hz
-    .gyro_odr = BMI_GYR_CONFIG_DEFAULT,  // 100Hz
+    .accel_range = BMI_ACC_RANGE_4G,     // Dải đo gia tốc: ±4g
+    .gyro_range = BMI_GYR_RANGE_500DPS,  // Dải đo vận tốc góc: ±500 độ/giây
+    .accel_odr = BMI_ACC_CONFIG_DEFAULT, // Tần số lấy mẫu gia tốc: 100Hz
+    .gyro_odr = BMI_GYR_CONFIG_DEFAULT,  // Tần số lấy mẫu con quay hồi chuyển: 100Hz
   };
-  while (BMI160_Init(&bmi, BMI160_I2C_PORT, BMI160_I2C_ADDR, &config) != BMI_OK) {
+  while (BMI160_Init(&bmi, BMI160_I2C_PORT, BMI160_I2C_ADDR, &config) != BMI_OK) {// nếu khởi tạo BMI160 thất bại, in ra thông báo lỗi và lặp lại sau 500ms
     printf("[TaskBMI160] Khoi tao BMI160 that bai, thu lai...\n");
-    vTaskDelay(pdMS_TO_TICKS(500));// nếu init thất bại, lặp lại sau 500ms
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
+
+  // B2: Cấu hình chế độ FIFO của BMI160 để đọc dữ liệu gia tốc và con quay, bật chế độ header để dễ dàng giải mã dữ liệu, không sử dụng ngưỡng cảnh báo (watermark = 0), chế độ ghi đè khi FIFO đầy, bật cảnh báo tràn dữ liệu (overrun)
   // cấu hình FIFO: bat acc + gyro, header mode de de giai ma
   BMI160_FIFO_Config_t fifo_cfg = {
       .acc_en = true,
       .gyr_en = true,
       .header_en = true,
       .time_en = false,
-      .watermark = 0,
-      .fifo_mode = BMI160_FIFO_MODE_OVERWRITE,
+      .watermark = 0,// watermark = 0: không sử dụng ngưỡng cảnh báo, đọc FIFO theo chu kỳ định sẵn
+      .fifo_mode = BMI160_FIFO_MODE_OVERWRITE, // chế độ ghi đè, khi FIFO đầy sẽ ghi đè dữ liệu cũ
       .overrun_en = true,
   };
-  BMI160_FIFO_Config(&bmi, &fifo_cfg);// cấu hình FIFO
+  while (BMI160_FIFO_Config(&bmi, &fifo_cfg) != BMI_OK) {// cấu hình FIFO 
+    printf("[TaskBMI160] Cau hinh FIFO that bai, thu lai...\n");
+    vTaskDelay(pdMS_TO_TICKS(500));
+  }
+
+  // B3: Khởi tạo bộ nhớ đệm tạm thời scratch_buf để đọc dữ liệu thô từ FIFO, khởi tạo mảng frames để lưu trữ các frame dữ liệu đã phân tích, khởi tạo biến result để lưu trữ kết quả phân tích dữ liệu FIFO, lấy thời gian hiện tại lastWake để tính toán chu kỳ đọc FIFO
   uint8_t scratch_buf[BMI160_FIFO_SCRATCH_SIZE]; // khởi tạo bộ nhớ đệm tạm thời
   BMI160_FIFO_Frame_t frames[BMI160_FIFO_MAX_FRAMES]; // khởi tạo bộ nhớ đệm để lưu trữ các frame
   BMI160_FIFO_Result_t result; // khởi tạo cấu trúc để lưu trữ kết quả
@@ -84,10 +93,10 @@ static void TaskBMI160(void *pvParameters) {
       BMI160_FIFO_Frame_t *last = &frames[result.frame_count - 1]; // lấy frame cuối cùng trong mảng frames
       BMI160_Physical_t phys; // khai báo biến phys để lưu trữ dữ liệu vật lý sau khi chuyển đổi
       if (BMI160_Algo_ConvertFrame(last, bmi.config.accel_range, bmi.config.gyro_range, &phys) == BMI_OK) {
-        if (xSemaphoreTake(g_mutex_bmi_data, pdMS_TO_TICKS(BMI160_MUTEX_WAIT_MS)) == pdTRUE) {
-            g_bmi_data = phys;
-            g_bmi_data_valid = true;
-            xSemaphoreGive(g_mutex_bmi_data);
+        if (xSemaphoreTake(g_mutex_bmi_data, pdMS_TO_TICKS(BMI160_MUTEX_WAIT_MS)) == pdTRUE) { 
+            g_bmi_data = phys; // cập nhật dữ liệu vật lý mới nhất vào biến toàn cục g_bmi_data
+            g_bmi_data_valid = true; // đánh dấu dữ liệu BMI160 là hợp lệ kể từ khi có frame đầu tiên
+            xSemaphoreGive(g_mutex_bmi_data); 
         }
 
         TickType_t now = xTaskGetTickCount();
@@ -102,7 +111,6 @@ static void TaskBMI160(void *pvParameters) {
     } else if (status != BMI_OK) {
       printf("[TaskBMI160] Loi doc FIFO!\n");
     }
-
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(BMI160_READ_PERIOD_MS)); // delay cho đến khi chu kỳ tiếp theo bắt đầu
     // lastWake : là thời điểm mà task được đánh thức lần cuối cùng, được cập nhật bởi hàm vTaskDelayUntil() để đảm bảo rằng task sẽ được đánh thức đúng chu kỳ định sẵn.
   }
@@ -260,12 +268,15 @@ static void TaskGPS(void *pvParameters) {
     }
 #endif // GPS_SIMULATE
 }
-// ================   TASK: MQTT            ========
-// nhiệm vụ : 
-// 1. kết nối mạng (nếu chưa kết nối)
-// 2. kết nối MQTT (nếu chưa kết nối)
-// 3. lấy dữ liệu GPS và BMI160 từ các biến toàn cục được bảo vệ bởi mutex
-// 4. gửi dữ liệu GPS và BMI160 lên server MQTT
+
+
+// ================          TASK: SD CARD                ==============
+#define PRIORITY_TASK_SDCARD  (tskIDLE_PRIORITY + 1) // Độ ưu tiên thấp hơn IMU một chút
+#define SDCARD_TASK_STACK_SIZE 2048                  // FatFs cần stack lớn hơn (khoảng 2KB)
+#define SDCARD_WRITE_PERIOD_MS 1000                  // Ghi log định kỳ mỗi 1 giây
+
+// Định nghĩa file lưu trữ dữ liệu log
+#define LOG_FILE_NAME "blackbox.csv"
 
 
 
@@ -283,8 +294,7 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask,
 // ================                MAIN                      =============
 int main() {
   stdio_init_all();
-  sleep_ms(5000); // cho mo cong USB-serial de khong mat log dau tien (bo neu
-                  // dung UART thuong)
+  sleep_ms(5000); 
 
   // Khoi tao tai nguyen dung chung TRUOC khi tao task su dung no
   g_mutex_gps_data = xSemaphoreCreateMutex();
@@ -299,20 +309,35 @@ int main() {
   // vi du: g_mutex_spi1 = xSemaphoreCreateMutex();
 
   // ---- tao cac task ----
-  BaseType_t ok_BMI160 =
-      xTaskCreate(TaskBMI160,             // ham task
-                  "TaskBMI160",           // ten task (hien trong debug/log)
-                  BMI160_TASK_STACK_SIZE, // kich thuoc stack (word)
-                  NULL,                   // tham so truyen vao task
-                  PRIORITY_TASK_BMI160,   // do uu tien
-                  NULL                    // khong can luu handle
-      );
-  BaseType_t ok_GPS = xTaskCreate(TaskGPS, "GPS", GPS_TASK_STACK_SIZE, NULL,  PRIORITY_TASK_GPS, NULL);
+  BaseType_t ok_BMI160 = xTaskCreate(
+    TaskBMI160,             // ham task
+    "TaskBMI160",           // ten task (hien trong debug/log)
+    BMI160_TASK_STACK_SIZE, // kich thuoc stack (word)
+    NULL,                   // tham so truyen vao task
+    PRIORITY_TASK_BMI160,   // do uu tien
+    NULL                    // khong can luu handle
+  );
+  BaseType_t ok_GPS = xTaskCreate(
+    TaskGPS, 
+    "GPS", 
+    GPS_TASK_STACK_SIZE, 
+    NULL,  
+    PRIORITY_TASK_GPS, 
+    NULL
+  );
+  BaseType_t ok_SDCARD = xTaskCreate(
+    TaskSDCard, 
+    "SDCARD", 
+    SDCARD_TASK_STACK_SIZE, 
+    NULL,  
+    PRIORITY_TASK_SDCARD, 
+    NULL
+  )
 
-  if (ok_BMI160 != pdPASS) {
+  if (ok_BMI160 != pdPASS || ok_GPS != pdPASS  || ok_SDCARD != pdPASS) {
     printf("Loi: khong the tao task!\n");
-    while (true) {
-      tight_loop_contents();
+    while (true) { // nếu không thể tạo task, vòng lặp vô hạn để dừng chương trình
+      tight_loop_contents(); 
     }
   }
 

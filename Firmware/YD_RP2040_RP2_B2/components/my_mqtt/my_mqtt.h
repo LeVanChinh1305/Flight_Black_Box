@@ -17,13 +17,13 @@
 #define MQTT_TOPIC_TELEMETRY   "flight/blackbox/telemetry"
 #define MQTT_TOPIC_COMMAND     "flight/blackbox/command"     
 
-bool mqtt_init(void);
-bool mqtt_connect(void);
-bool mqtt_disconnect(void);
-bool mqtt_publish(const char* topic, const char* payload, bool retain);
-bool mqtt_subscribe(const char* topic);
-bool mqtt_unsubscribe(const char* topic);
-bool mqtt_process(void);
+bool mqtt_init(void);                                                        // Khởi tạo MQTT client
+bool mqtt_connect(void);                                                     // Kết nối đến broker MQTT
+bool mqtt_disconnect(void);                                                  // Ngắt kết nối khỏi broker MQTT
+bool mqtt_publish(const char* topic, const char* payload, bool retain);      // Gửi dữ liệu lên broker MQTT
+bool mqtt_subscribe(const char* topic);                                      // Đăng ký nhận tin nhắn từ topic
+bool mqtt_unsubscribe(const char* topic);                                    // Hủy đăng ký nhận tin nhắn từ topic
+bool mqtt_process(void);                                                     // Xử lý các sự kiện MQTT
 
 extern void mqtt_message_received(const char* topic, const char* payload);
 
