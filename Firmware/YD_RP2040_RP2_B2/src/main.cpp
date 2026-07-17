@@ -8,6 +8,7 @@
 
 #include "algorithm_bmi160.h"
 #include "bmi160.h"
+#include "buzzer.h"
 #include "my_mqtt.h"
 #include "neo6m.h"
 #include "sim7680.h"
@@ -17,6 +18,7 @@
 
 #include "tft.h"
 #include "xpt2046.h"
+#include "ui.h"
 
 // ================Định nghĩa mức độ ưu tiên (Priority) cho các Task trong FreeRTOS==============
 #define PRIORITY_TASK_BMI160 (tskIDLE_PRIORITY + 3)
@@ -26,6 +28,26 @@
 static SemaphoreHandle_t g_mutex_gps_data = NULL; // mutex bảo vệ dữ liệu GPS (g_gps_data) khi được truy cập bởi nhiều task
 static SemaphoreHandle_t g_mutex_bmi_data = NULL; // mutex bảo vệ dữ liệu BMI160 (g_bmi_data) khi được truy cập bởi nhiều task
 static SemaphoreHandle_t g_mutex_spi0 = NULL;     // mutex bảo vệ bus SPI0 (SDCard + XPT2046)
+
+// ================     BUZZER: Queue & lệnh điều khiển     ==============
+// Giao tiếp bằng Queue để task khác gửi lệnh mà không bị chặn luồng.
+typedef enum {
+    BUZZER_CMD_BOOT_OK    = 0,  // 2 bíp ngắn lúc khởi động thành công
+    BUZZER_CMD_BOOT_ERROR = 1,  // 1 bíp dài báo lỗi nghiêm trọng
+    BUZZER_CMD_BEEP_SHORT = 2,  // 1 bíp ngắn (100ms) - xác nhận hành động
+    BUZZER_CMD_BEEP_LONG  = 3,  // 1 bíp dài (500ms)  - cảnh báo nhẹ
+    BUZZER_CMD_ALARM      = 4,  // bíp liên tục 3s/lần - chế độ định vị
+    BUZZER_CMD_ALARM_STOP = 5,  // dừng chế độ định vị
+} BuzzerCmd_t;
+
+static QueueHandle_t g_buzzer_queue = NULL;  // Queue gửi lệnh tới TaskBuzzer
+
+// Gửi lệnh tới TaskBuzzer từ bất kỳ task nào (non-blocking)
+// Trả về true nếu gửi thành công, false nếu queue đầy (bỏ qua lệnh)
+static inline bool Buzzer_SendCmd(BuzzerCmd_t cmd) {
+    if (g_buzzer_queue == NULL) return false;
+    return xQueueSend(g_buzzer_queue, &cmd, 0) == pdTRUE;
+}
 
 // ================          TASK: BMI160 (IMU)            ==============
 #define BMI160_TASK_STACK_SIZE 1024     // Cấp phát kích thước vùng nhớ Stack cho task
@@ -422,205 +444,86 @@ static void TaskSDCard(void *pvParameters) {
   }
 }
 
-// ================          TASK: UI (TFT & XPT)         ==============
-#define UI_TASK_STACK_SIZE 2048
-#define UI_UPDATE_PERIOD_MS 100
+// ================   TASK: BUZZER                         ==============
+// Độ ưu tiên thấp nhất: buzzer chỉ phát âm thanh, không ảnh hưởng telemetry.
+#define PRIORITY_TASK_BUZZER   (tskIDLE_PRIORITY + 1)
+#define BUZZER_TASK_STACK_SIZE  512   // Chỉ cần GPIO + vTaskDelay, stack nhỏ là đủ
+#define BUZZER_QUEUE_LEN        8     // Tối đa 8 lệnh chờ trong queue
 
-static tft_dev_t g_tft;
-static xpt2046_dev_t g_touch;
-static int g_current_page = 1;
-
-static void UI_DrawTopBar_Static(void) {
-    TFT_FillRect(&g_tft, 0, 0, TFT_WIDTH, 30, TFT_COLOR_BLUE);
-    TFT_DrawString(&g_tft, 5, 10, "SD", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
-    TFT_DrawString(&g_tft, 35, 10, "SIM:OK", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
-    TFT_DrawString(&g_tft, 190, 10, "[85%]", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
-}
-
-static void UI_DrawTopBar_Dynamic(void) {
-    neo6m_data_t gps;
-    if (GPS_GetLastData(&gps) && gps.is_valid) {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02u:%02u ", (unsigned)gps.hour, (unsigned)gps.minute);
-        TFT_DrawString(&g_tft, 100, 10, buf, TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
-    } else {
-        TFT_DrawString(&g_tft, 100, 10, "--:-- ", TFT_COLOR_WHITE, TFT_COLOR_BLUE, 1);
-    }
-}
-
-static void UI_DrawBottomTabs(void) {
-    TFT_FillRect(&g_tft, 0, TFT_HEIGHT - 50, TFT_WIDTH, 50, TFT_COLOR_BLACK);
-    
-    // Vien phan cach cac nut bam (dung FillRect de ve duong ke 2 pixel)
-    TFT_FillRect(&g_tft, 0, TFT_HEIGHT - 50, TFT_WIDTH, 2, TFT_COLOR_WHITE); // Ke ngang
-    TFT_FillRect(&g_tft, TFT_WIDTH / 3, TFT_HEIGHT - 50, 2, 50, TFT_COLOR_WHITE); // Ke doc 1
-    TFT_FillRect(&g_tft, 2 * TFT_WIDTH / 3, TFT_HEIGHT - 50, 2, 50, TFT_COLOR_WHITE); // Ke doc 2
-
-    uint16_t c1 = (g_current_page == 1) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
-    uint16_t c2 = (g_current_page == 2) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
-    uint16_t c3 = (g_current_page == 3) ? TFT_COLOR_RED : TFT_COLOR_WHITE;
-
-    // Font size 2 de de doc, de bam
-    TFT_DrawString(&g_tft, 20, TFT_HEIGHT - 35, "GPS", c1, TFT_COLOR_BLACK, 2);
-    TFT_DrawString(&g_tft, 100, TFT_HEIGHT - 35, "IMU", c2, TFT_COLOR_BLACK, 2);
-    TFT_DrawString(&g_tft, 185, TFT_HEIGHT - 35, "SD", c3, TFT_COLOR_BLACK, 2);
-}
-
-static void UI_DrawPage1_Static(void) {
-    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
-    TFT_DrawString(&g_tft, 20, 40, "GPS (NEO-6M) INFO", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 80, "* LAT :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 100, "* LON :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 120, "* ALT :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 150, "* SPD :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 120, 150, "* HDG :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 180, "* TIME:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 200, "* SATS:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-}
-
-static void UI_DrawPage1_Dynamic(void) {
-    neo6m_data_t gps;
-    if (GPS_GetLastData(&gps)) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "  %.6f N       ", gps.latitude);
-        TFT_DrawString(&g_tft, 60, 80, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), "  %.6f E       ", gps.longitude);
-        TFT_DrawString(&g_tft, 60, 100, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), "  %.1f m         ", gps.altitude_m);
-        TFT_DrawString(&g_tft, 60, 120, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), "%.1f km/h ", gps.speed_kmh);
-        TFT_DrawString(&g_tft, 60, 150, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-
-        snprintf(buf, sizeof(buf), "%.0f deg  ", gps.course_deg);
-        TFT_DrawString(&g_tft, 170, 150, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), "  %02u:%02u:%02u UTC   ", 
-                 (unsigned)gps.hour, (unsigned)gps.minute, (unsigned)gps.second);
-        TFT_DrawString(&g_tft, 60, 180, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-
-        snprintf(buf, sizeof(buf), "  %02u        ", (unsigned)gps.satellites);
-        TFT_DrawString(&g_tft, 60, 200, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-    }
-}
-
-static void UI_DrawPage2_Static(void) {
-    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
-    TFT_DrawString(&g_tft, 20, 40, "BMI160 IMU INFO", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 80, "* PITCH :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 100, "* ROLL  :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 120, "* G-MAG :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    
-    TFT_DrawString(&g_tft, 10, 160, "ACC (g) :", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 180, "GYR(dps):", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-}
-
-static void UI_DrawPage2_Dynamic(void) {
-    BMI160_Physical_t bmi;
-    if (BMI160_GetLastData(&bmi)) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), " %+6.1f deg    ", bmi.acc_y_g * 90.0f);
-        TFT_DrawString(&g_tft, 80, 80, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), " %+6.1f deg    ", bmi.acc_x_g * 90.0f);
-        TFT_DrawString(&g_tft, 80, 100, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), " %5.2f G      ", bmi.acc_magnitude_g);
-        TFT_DrawString(&g_tft, 80, 120, buf, TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-        
-        snprintf(buf, sizeof(buf), "X:%+.1f Y:%+.1f Z:%+.1f  ", bmi.acc_x_g, bmi.acc_y_g, bmi.acc_z_g);
-        TFT_DrawString(&g_tft, 80, 160, buf, TFT_COLOR_GREEN, TFT_COLOR_BLACK, 1);
-
-        snprintf(buf, sizeof(buf), "X:%+.0f Y:%+.0f Z:%+.0f  ", bmi.gyr_x_dps, bmi.gyr_y_dps, bmi.gyr_z_dps);
-        TFT_DrawString(&g_tft, 80, 180, buf, TFT_COLOR_GREEN, TFT_COLOR_BLACK, 1);
-    }
-}
-
-static void UI_DrawPage3_Static(void) {
-    TFT_FillRect(&g_tft, 0, 30, TFT_WIDTH, TFT_HEIGHT - 80, TFT_COLOR_BLACK);
-    TFT_DrawString(&g_tft, 40, 40, "STORAGE STATUS", TFT_COLOR_YELLOW, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 70, "* SD CARD: DETECTED", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 90, "* FILE SYSTEM: FAT32", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 130, "* CAPACITY:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 150, "  [||||||||||||||||||.......]", TFT_COLOR_CYAN, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 170, "  Used: 4.2 GB / Free: 11.8 GB", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    TFT_DrawString(&g_tft, 10, 210, "* STATUS:", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-}
-
-static void UI_DrawPage3_Dynamic(void) {
-    static bool blink = false;
-    blink = !blink;
-    if (blink) {
-        TFT_DrawString(&g_tft, 10, 230, "  >> LOGGING...       ", TFT_COLOR_RED, TFT_COLOR_BLACK, 1);
-    } else {
-        TFT_DrawString(&g_tft, 10, 230, "  >> LOGGING...       ", TFT_COLOR_WHITE, TFT_COLOR_BLACK, 1);
-    }
-}
-
-static void TaskUI(void *pvParameters) {
+static void TaskBuzzer(void *pvParameters) {
     (void)pvParameters;
-    
-    if (TFT_Init(&g_tft, TFT_SPI_PORT) != TFT_OK) {
-        printf("[TaskUI] TFT_Init that bai!\n");
-    }
-    
-    if (g_mutex_spi0) xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
-    if (XPT2046_Init(&g_touch, XPT2046_SPI_PORT) != XPT_OK) {
-        printf("[TaskUI] XPT2046_Init that bai!\n");
-    }
-    if (g_mutex_spi0) xSemaphoreGive(g_mutex_spi0);
-    
-    TFT_FillScreen(&g_tft, TFT_COLOR_BLACK);
-    UI_DrawTopBar_Static();
-    UI_DrawTopBar_Dynamic();
-    UI_DrawPage1_Static();
-    UI_DrawPage1_Dynamic();
-    UI_DrawBottomTabs();
-    
-    int last_page = g_current_page;
-    TickType_t lastWake = xTaskGetTickCount();
-    uint32_t redraw_counter = 0;
-    
+
+    // B1: Khởi tạo GPIO còi
+    Buzzer_Init();
+    printf("[TaskBuzzer] Khoi tao buzzer GPIO %d thanh cong.\n", BUZZER_PIN);
+
+    // B2: Phát 2 bíp báo boot OK -- dùng vTaskDelay thay sleep_ms
+    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_BEEP_MS));
+    gpio_put(BUZZER_PIN, 0); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_GAP_MS));
+    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_BEEP_MS));
+    gpio_put(BUZZER_PIN, 0);
+    printf("[TaskBuzzer] Boot OK beep phat xong.\n");
+
+    // B3: Vòng lặp chính -- chờ lệnh từ queue, xử lý từng lệnh
+    bool alarm_active = false;
+    BuzzerCmd_t cmd;
     for (;;) {
-        bool touched = false;
-        if (g_mutex_spi0 && xSemaphoreTake(g_mutex_spi0, pdMS_TO_TICKS(50)) == pdTRUE) {
-            if (XPT2046_Update(&g_touch) == XPT_OK) {
-                touched = g_touch.is_touched;
+        // Nếu đang alarm: chờ lệnh tối đa 3s rồi tự bíp; nếu không: chờ vô hạn
+        TickType_t wait = alarm_active
+                        ? pdMS_TO_TICKS(BUZZER_ALARM_PERIOD_MS)
+                        : portMAX_DELAY;
+
+        if (xQueueReceive(g_buzzer_queue, &cmd, wait) == pdTRUE) {
+            switch (cmd) {
+                case BUZZER_CMD_BOOT_OK:
+                    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_BEEP_MS));
+                    gpio_put(BUZZER_PIN, 0); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_GAP_MS));
+                    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_BOOT_OK_BEEP_MS));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+
+                case BUZZER_CMD_BOOT_ERROR:
+                    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_ERROR_BEEP_MS));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+
+                case BUZZER_CMD_BEEP_SHORT:
+                    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(100));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+
+                case BUZZER_CMD_BEEP_LONG:
+                    gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(500));
+                    gpio_put(BUZZER_PIN, 0);
+                    break;
+
+                case BUZZER_CMD_ALARM:
+                    alarm_active = true;
+                    printf("[TaskBuzzer] Che do ALARM bat.\n");
+                    break;
+
+                case BUZZER_CMD_ALARM_STOP:
+                    alarm_active = false;
+                    gpio_put(BUZZER_PIN, 0);
+                    printf("[TaskBuzzer] Che do ALARM tat.\n");
+                    break;
+
+                default:
+                    break;
             }
-            xSemaphoreGive(g_mutex_spi0);
-        }
-        
-        if (touched) {
-            if (g_touch.y > TFT_HEIGHT - 50) {
-                if (g_touch.x < TFT_WIDTH / 3) g_current_page = 1;
-                else if (g_touch.x < 2 * TFT_WIDTH / 3) g_current_page = 2;
-                else g_current_page = 3;
-            }
-        }
-        
-        bool page_changed = (g_current_page != last_page);
-        if (page_changed) {
-            if (g_current_page == 1) { UI_DrawPage1_Static(); UI_DrawPage1_Dynamic(); }
-            else if (g_current_page == 2) { UI_DrawPage2_Static(); UI_DrawPage2_Dynamic(); }
-            else if (g_current_page == 3) { UI_DrawPage3_Static(); UI_DrawPage3_Dynamic(); }
-            UI_DrawBottomTabs();
-            last_page = g_current_page;
         } else {
-            redraw_counter++;
-            if (redraw_counter >= 10) {
-                redraw_counter = 0;
-                UI_DrawTopBar_Dynamic();
-                if (g_current_page == 1) UI_DrawPage1_Dynamic();
-                else if (g_current_page == 2) UI_DrawPage2_Dynamic();
-                else if (g_current_page == 3) UI_DrawPage3_Dynamic();
+            // Timeout -> đang ở chế độ alarm, phát 1 bíp định vị
+            if (alarm_active) {
+                gpio_put(BUZZER_PIN, 1); vTaskDelay(pdMS_TO_TICKS(BUZZER_ALARM_BEEP_MS));
+                gpio_put(BUZZER_PIN, 0);
             }
         }
-        
-        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(UI_UPDATE_PERIOD_MS));
     }
 }
+
+// ================   TASK: UI (TFT & XPT)   ==============
+// Tham so (mutex SPI0) duoc truyen qua UI_TaskParams_t.
+static UI_TaskParams_t g_ui_params;
 
 // ================   HOOK BAT BUOC CUA FREERTOS            ========
 extern "C" void vApplicationMallocFailedHook(void) {
@@ -652,9 +555,11 @@ int main() {
   // Khoi tao tai nguyen dung chung TRUOC khi tao task su dung no
   g_mutex_gps_data = xSemaphoreCreateMutex();
   g_mutex_bmi_data = xSemaphoreCreateMutex();
-  g_mutex_spi0 = xSemaphoreCreateMutex();
-  if (g_mutex_gps_data == NULL || g_mutex_bmi_data == NULL || g_mutex_spi0 == NULL) {
-    printf("[main] Khong the tao mutex!\n");
+  g_mutex_spi0     = xSemaphoreCreateMutex();
+  g_buzzer_queue   = xQueueCreate(BUZZER_QUEUE_LEN, sizeof(BuzzerCmd_t));
+  if (g_mutex_gps_data == NULL || g_mutex_bmi_data == NULL ||
+      g_mutex_spi0 == NULL || g_buzzer_queue == NULL) {
+    printf("[main] Khong the tao mutex/queue!\n");
     while (true) tight_loop_contents();
   }
   printf("=== Flight Black Box - Bat dau chuong trinh ===\n");
@@ -687,16 +592,28 @@ int main() {
     PRIORITY_TASK_SDCARD, 
     NULL
   );
+  BaseType_t ok_BUZZER = xTaskCreate(
+    TaskBuzzer,
+    "BUZZER",
+    BUZZER_TASK_STACK_SIZE,
+    NULL,
+    PRIORITY_TASK_BUZZER,
+    NULL
+  );
+  // cap nhat tham so UI truoc khi tao task
+  g_ui_params.mutex_spi0 = g_mutex_spi0;
+
   BaseType_t ok_UI = xTaskCreate(
-    TaskUI, 
-    "UI", 
-    2048, 
-    NULL,  
-    (tskIDLE_PRIORITY + 1), 
+    TaskUI,
+    "UI",
+    2048,
+    &g_ui_params,
+    (tskIDLE_PRIORITY + 1),
     NULL
   );
 
-  if (ok_BMI160 != pdPASS || ok_GPS != pdPASS || ok_SDCARD != pdPASS || ok_UI != pdPASS) {
+  if (ok_BMI160 != pdPASS || ok_GPS != pdPASS || ok_SDCARD != pdPASS ||
+      ok_UI != pdPASS || ok_BUZZER != pdPASS) {
     printf("Loi: khong the tao task!\n");
     while (true) { // nếu không thể tạo task, vòng lặp vô hạn để dừng chương trình
       tight_loop_contents(); 

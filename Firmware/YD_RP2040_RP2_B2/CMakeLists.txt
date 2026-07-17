@@ -54,6 +54,8 @@ add_executable(YD_RP2040_RP2_B2
     components/algorithm_bmi160/algorithm_bmi160.cpp
     components/xpt2046/xpt2046.h
     components/xpt2046/xpt2046.cpp
+    components/ui/ui.h
+    components/ui/ui.cpp
     components/font5x7/font5x7.cpp
     components/font5x7/font5x7.h
     fatfs/diskio.c
@@ -86,6 +88,7 @@ target_include_directories(YD_RP2040_RP2_B2 PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/components/tft
     ${CMAKE_CURRENT_LIST_DIR}/components/algorithm_bmi160
     ${CMAKE_CURRENT_LIST_DIR}/components/xpt2046
+    ${CMAKE_CURRENT_LIST_DIR}/components/ui
     ${CMAKE_CURRENT_LIST_DIR}/components/shared_data
     ${CMAKE_CURRENT_LIST_DIR}/components/font5x7
     ${CMAKE_CURRENT_LIST_DIR}/fatfs
