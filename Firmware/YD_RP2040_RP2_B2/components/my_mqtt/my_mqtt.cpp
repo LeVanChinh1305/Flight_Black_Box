@@ -23,37 +23,18 @@ static bool send_at_cmd(const char *cmd, uint32_t timeout_ms) {
   }
   return ok;
 }
+
+// Gửi lệnh mở prompt '>' rồi gửi dữ liệu thô (topic/payload) kết thúc bằng
+// Ctrl+Z. Không còn tự đọc UART trực tiếp nữa - dùng chung hàng đợi phản hồi
+// với mọi lệnh AT khác (sim7680_wait_prompt / sim7680_send_cmd), vì vậy
+// không có nguy cơ giẫm chân / xóa mất dữ liệu URC đang đến song song.
 static bool send_with_prompt(const char *cmd, const char *data,
                              uint32_t timeout_ms) {
-  // Xả sạch buffer
-  while (uart_is_readable(SIM7680_UART)) {
-    (void)uart_getc(SIM7680_UART);
-  }
-
   uart_puts(SIM7680_UART, cmd);
   uart_puts(SIM7680_UART, "\r\n");
 
-  printf("[MQTT] Đang chờ prompt '>' cho: %s\n", cmd); // Debug
-
-  absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
-  bool found_prompt = false;
-
-  while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
-    if (uart_is_readable(SIM7680_UART)) {
-      char c = uart_getc(SIM7680_UART);
-      putchar(c); // In ra từng ký tự để debug
-
-      if (c == '>') {
-        found_prompt = true;
-        break;
-      }
-    } else {
-      vTaskDelay(pdMS_TO_TICKS(10)); // Tăng delay để nhường CPU
-    }
-  }
-
-  if (!found_prompt) {
-    printf("[MQTT] Timeout: Không nhận được '>' cho lệnh %s\n", cmd);
+  if (!sim7680_wait_prompt(timeout_ms)) {
+    printf("[MQTT] Timeout: Khong nhan duoc '>' cho lenh %s\n", cmd);
     return false;
   }
 
@@ -61,27 +42,10 @@ static bool send_with_prompt(const char *cmd, const char *data,
   uart_puts(SIM7680_UART, data);
   uart_putc(SIM7680_UART, 0x1A);
 
-  // Chờ OK
+  // Chờ "OK" cho việc gửi data này - không gửi thêm lệnh AT nào,
+  // chỉ đọc tiếp từ hàng đợi phản hồi.
   char resp[128] = {0};
-  size_t idx = 0;
-  deadline = make_timeout_time_ms(timeout_ms);
-
-  while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
-    if (uart_is_readable(SIM7680_UART)) {
-      char c = uart_getc(SIM7680_UART);
-      if (idx < sizeof(resp) - 1) {
-        resp[idx++] = c;
-        resp[idx] = '\0';
-      }
-      if (strstr(resp, "OK") != NULL)
-        return true;
-      if (strstr(resp, "ERROR") != NULL)
-        return false;
-    } else {
-      vTaskDelay(pdMS_TO_TICKS(10));
-    }
-  }
-  return strstr(resp, "OK") != NULL;
+  return sim7680_read_ok(resp, sizeof(resp), timeout_ms);
 }
 
 static void setup_pdp_context(void) {
@@ -127,8 +91,7 @@ bool mqtt_connect(void) {
     return false;
 
   char cmd[120];
-  snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", MQTT_CLIENT_ID); 
-  // snprintf: 
+  snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", MQTT_CLIENT_ID);
   if (!send_at_cmd(cmd, 3000))
     return false;
 
@@ -182,42 +145,11 @@ bool mqtt_subscribe(const char *topic) {
   return send_at_cmd("AT+CMQTTSUB=0", 5000);
 }
 
-bool mqtt_process(void) {
-  static char process_buf[512];
-  static size_t p_idx = 0;
-
-  while (uart_is_readable(SIM7680_UART)) {
-    char c = uart_getc(SIM7680_UART);
-
-    if (p_idx < sizeof(process_buf) - 1) {
-      process_buf[p_idx++] = c;
-      process_buf[p_idx] = '\0';
-    }
-
-    // Kiểm tra xem có nhận được URC báo có tin nhắn hay không
-    if (strstr(process_buf, "+CMRECV:") != NULL && c == '\n') {
-      printf("\n-----------------------------------------\n");
-      printf("[KẾT QUẢ] NHẬN ĐƯỢC LỆNH TỪ BROKER:\n%s", process_buf);
-      printf("-----------------------------------------\n\n");
-
-      mqtt_message_received(MQTT_TOPIC_COMMAND, process_buf);
-
-      p_idx = 0;
-      process_buf[0] = '\0';
-      return true;
-    }
-
-    // Tối ưu giải phóng bộ đệm nếu nhận được dòng phản hồi OK/FAIL thông thường
-    // từ các lệnh khác
-    if (c == '\n') {
-      if (strstr(process_buf, "+CMRECV:") == NULL) {
-        p_idx = 0;
-        process_buf[0] = '\0';
-      }
-    }
-  }
-  return true;
-}
+// URC "+CMRECV:" giờ được sim7680_rx_task (trong sim7680.cpp) chặn và gọi
+// mqtt_message_received() ngay tại chỗ, độc lập hoàn toàn với việc publish
+// hay bất kỳ lệnh AT nào khác đang chạy. Vì vậy hàm này không còn cần đọc
+// UART nữa - giữ lại chỉ để không phải sửa main.cpp (TaskMQTT vẫn gọi nó).
+bool mqtt_process(void) { return true; }
 
 bool mqtt_disconnect(void) { return true; }
 bool mqtt_unsubscribe(const char *topic) {
