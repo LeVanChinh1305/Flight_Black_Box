@@ -7,7 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 
-
 static bool mqtt_started = false;
 static bool mqtt_connected = false;
 
@@ -19,50 +18,51 @@ void __attribute__((weak)) mqtt_message_received(const char *topic,
 static bool send_at_cmd(const char *cmd, uint32_t timeout_ms) {
   char resp[128];
   bool ok = sim7680_send_cmd(cmd, resp, sizeof(resp), timeout_ms);
-  printf("[MQTT] CMD: %s -> %s\n", cmd, ok ? "OK" : "FAIL");
+  if (!ok) {
+    printf("[MQTT] CMD FAIL: %s\n", cmd);   // Chỉ in khi lỗi
+  }
   return ok;
 }
 static bool send_with_prompt(const char *cmd, const char *data,
                              uint32_t timeout_ms) {
-  // TỐI ƯU: Chỉ xả sạch bộ đệm RX NGAY TRƯỚC KHI gửi lệnh cấu hình
-  // để chắc chắn ký tự đầu tiên nhận được sau đó là phản hồi của chính lệnh
-  // này.
+  // Xả sạch buffer
   while (uart_is_readable(SIM7680_UART)) {
     (void)uart_getc(SIM7680_UART);
   }
 
-  // Gửi lệnh AT chính (ví dụ: AT+CMQTTTOPIC=0,25)
   uart_puts(SIM7680_UART, cmd);
   uart_puts(SIM7680_UART, "\r\n");
 
-  // Chờ prompt '>' từ module SIM
+  printf("[MQTT] Đang chờ prompt '>' cho: %s\n", cmd); // Debug
+
   absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
   bool found_prompt = false;
 
   while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
     if (uart_is_readable(SIM7680_UART)) {
       char c = uart_getc(SIM7680_UART);
+      putchar(c); // In ra từng ký tự để debug
+
       if (c == '>') {
         found_prompt = true;
         break;
       }
     } else {
-      vTaskDelay(pdMS_TO_TICKS(1));
+      vTaskDelay(pdMS_TO_TICKS(10)); // Tăng delay để nhường CPU
     }
   }
 
   if (!found_prompt) {
-    printf("[MQTT] Không nhận được ký tự '>' prompt cho lệnh: %s\n", cmd);
+    printf("[MQTT] Timeout: Không nhận được '>' cho lệnh %s\n", cmd);
     return false;
   }
 
-  // Gửi dữ liệu nội dung thô + Ký tự kết thúc Ctrl+Z (0x1A)
+  // Gửi data + Ctrl+Z
   uart_puts(SIM7680_UART, data);
   uart_putc(SIM7680_UART, 0x1A);
 
-  // Đọc phản hồi OK sau khi truyền data. Thoat som ngay khi thay "OK" thay vi
-  // luon cho du timeout_ms - tranh lang phi vai giay moi lan publish.
-  char resp[128];
+  // Chờ OK
+  char resp[128] = {0};
   size_t idx = 0;
   deadline = make_timeout_time_ms(timeout_ms);
 
@@ -73,19 +73,15 @@ static bool send_with_prompt(const char *cmd, const char *data,
         resp[idx++] = c;
         resp[idx] = '\0';
       }
-      if (strstr(resp, "OK") != NULL) {
+      if (strstr(resp, "OK") != NULL)
         return true;
-      }
-      if (strstr(resp, "ERROR") != NULL) {
+      if (strstr(resp, "ERROR") != NULL)
         return false;
-      }
     } else {
-      vTaskDelay(pdMS_TO_TICKS(1));
+      vTaskDelay(pdMS_TO_TICKS(10));
     }
   }
-  resp[idx] = '\0';
-
-  return (strstr(resp, "OK") != NULL);
+  return strstr(resp, "OK") != NULL;
 }
 
 static void setup_pdp_context(void) {
@@ -131,7 +127,8 @@ bool mqtt_connect(void) {
     return false;
 
   char cmd[120];
-  snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", MQTT_CLIENT_ID);
+  snprintf(cmd, sizeof(cmd), "AT+CMQTTACCQ=0,\"%s\"", MQTT_CLIENT_ID); 
+  // snprintf: 
   if (!send_at_cmd(cmd, 3000))
     return false;
 

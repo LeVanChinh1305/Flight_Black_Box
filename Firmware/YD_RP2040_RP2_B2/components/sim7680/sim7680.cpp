@@ -165,13 +165,25 @@ bool sim7680_get_network_status(int *status)
 
 bool sim7680_check_sim(bool *ready)
 {
-    char resp[64];
-    if (!sim7680_send_cmd("AT+CPIN?", resp, sizeof(resp), 2000)) {
-        *ready = false;
+    char resp[64] = {0};
+    *ready = false;
+
+    if (!sim7680_send_cmd("AT+CPIN?", resp, sizeof(resp), 3000)) {
+        printf("[SIM] AT+CPIN? gui that bai. Resp: %s\n", resp);
         return false;
     }
-    *ready = (strstr(resp, "+CPIN: READY") != NULL);
-    return true;
+
+    printf("[SIM DEBUG] AT+CPIN? response: [%s]\n", resp);   // ← Thêm dòng này
+
+    if (strstr(resp, "+CPIN: READY") != NULL) {
+        *ready = true;
+        return true;
+    }
+    if (strstr(resp, "+CPIN: SIM PIN") != NULL) {
+        printf("[SIM] SIM dang yeu cau PIN!\n");
+    }
+
+    return false;
 }
 
 bool sim7680_get_radio_function(int *cfun)
