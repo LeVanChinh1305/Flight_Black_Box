@@ -36,8 +36,13 @@ pico_sdk_init()
 
 add_executable(YD_RP2040_RP2_B2 
     src/main.cpp
+    src/task_bmi160.c
+    src/task_gps.c
+    src/task_sdcard.c
+    src/task_mqtt.c
+    src/task_buzzer.c
+    src/task_ui.c
     components/my_mqtt/my_mqtt.cpp
-    components/my_mqtt/my_mqtt.h
     components/sim7680/sim7680.cpp
     components/sim7680/sim7680.h
     components/bmi160/bmi160.h

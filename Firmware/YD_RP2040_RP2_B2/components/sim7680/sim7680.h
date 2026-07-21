@@ -1,6 +1,10 @@
 #ifndef SIM7680_H
 #define SIM7680_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -53,5 +57,9 @@ bool sim7680_check_sim(bool *ready);
 
 // Kiểm tra trạng thái chức năng vô tuyến (AT+CFUN?). 0=tat song,1=bat day du,4=che do bay
 bool sim7680_get_radio_function(int *cfun);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // SIM7680_H

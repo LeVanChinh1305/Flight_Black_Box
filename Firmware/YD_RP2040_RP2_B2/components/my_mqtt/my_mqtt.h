@@ -1,6 +1,10 @@
 #ifndef MY_MQTT_H
 #define MY_MQTT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -26,5 +30,9 @@ bool mqtt_unsubscribe(const char* topic);                                    // 
 bool mqtt_process(void);                                                     // Xử lý các sự kiện MQTT
 
 extern void mqtt_message_received(const char* topic, const char* payload);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // MY_MQTT_H
