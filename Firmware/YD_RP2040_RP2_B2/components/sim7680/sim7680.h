@@ -34,7 +34,7 @@ bool sim7680_get_imei(char *imei, size_t size);
 // Lấy tên model module (ATI)
 bool sim7680_get_model(char *model, size_t size);
 
-// Lấy chất lượng tín hiệu AT+CSQ -> rssi:0-31,99  ber:0-7,99
+// Lấy chất lượng tín hiệu AT+CSQ -> rssi:0-31,99  ber:0-7,99 kkk
 bool sim7680_get_signal_quality(int *rssi, int *ber);
 
 // Lấy trạng thái đăng ký mạng AT+CREG? -> status: 0..5
