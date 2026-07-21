@@ -583,7 +583,7 @@ static void TaskMQTT(void *pvParameters) {
 
   for (;;) {
     switch (state) {
-    case MQTT_STATE_INIT_SIM: { // Khởi tạo SIM và chờ SIM sẵn sàng
+    case MQTT_STATE_INIT_SIM: { // Khởi tạo SIM và chờ SIM sẵn sàng hhh
       printf("[TaskMQTT] Trang thai: INIT_SIM\n");
       sim7680_init();
       printf("[TaskMQTT] Cho SIM ready...\n");
