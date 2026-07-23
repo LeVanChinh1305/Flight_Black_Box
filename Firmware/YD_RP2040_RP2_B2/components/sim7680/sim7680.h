@@ -51,6 +51,8 @@ bool sim7680_get_signal_quality(int *rssi, int *ber);
 
 // Lấy trạng thái đăng ký mạng AT+CREG? -> status: 0..5
 bool sim7680_get_network_status(int *status);
+bool sim7680_get_gprs_attach(bool *attached);
+bool sim7680_wait_network_ready(uint32_t timeout_ms);
 
 // Kiểm tra SIM đã được nhận diện chưa (AT+CPIN?). ready=true nếu SIM sẵn sàng (READY).
 bool sim7680_check_sim(bool *ready);

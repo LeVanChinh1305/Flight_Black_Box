@@ -19,11 +19,11 @@ static bool send_at_cmd(const char *cmd, uint32_t timeout_ms) {
   char resp[128];
   bool ok = sim7680_send_cmd(cmd, resp, sizeof(resp), timeout_ms);
   if (!ok) {
-    printf("[MQTT] CMD FAIL: %s\n", cmd);   // Chỉ in khi lỗi
+    printf("[MQTT] CMD FAIL: %s -> %s\n", cmd, resp);   // Chỉ in khi lỗi
   }
   return ok;
 }
-
+ 
 // Gửi lệnh mở prompt '>' rồi gửi dữ liệu thô (topic/payload) kết thúc bằng
 // Ctrl+Z. Không còn tự đọc UART trực tiếp nữa - dùng chung hàng đợi phản hồi
 // với mọi lệnh AT khác (sim7680_wait_prompt / sim7680_send_cmd), vì vậy
@@ -48,11 +48,15 @@ static bool send_with_prompt(const char *cmd, const char *data,
   return sim7680_read_ok(resp, sizeof(resp), timeout_ms);
 }
 
-static void setup_pdp_context(void) {
+static bool setup_pdp_context(void) {
   printf("[NET] Cấu hình PDP...\n");
-  send_at_cmd("AT+CGDCONT=1,\"IP\",\"viettel\"", 3000);
-  send_at_cmd("AT+CGACT=1,1", 5000);
-  send_at_cmd("AT+CGPADDR=1", 3000);
+  if (!send_at_cmd("AT+CGDCONT=1,\"IP\",\"viettel\"", 3000)) {
+    return false;
+  }
+  if (!send_at_cmd("AT+CGACT=1,1", 5000)) {
+    return false;
+  }
+  return send_at_cmd("AT+CGPADDR=1", 3000);
 }
 
 bool mqtt_init(void) {
@@ -67,7 +71,15 @@ bool mqtt_init(void) {
   send_at_cmd("AT+CFUN=1", 5000);
   vTaskDelay(pdMS_TO_TICKS(3000));
 
-  setup_pdp_context();
+  if (!sim7680_wait_network_ready(20000)) {
+    printf("[MQTT] Network not ready after CFUN reset\n");
+    return false;
+  }
+
+  if (!setup_pdp_context()) {
+    printf("[MQTT] PDP context setup failed\n");
+    return false;
+  }
 
   char test_resp[128];
   bool supports_mqtt =

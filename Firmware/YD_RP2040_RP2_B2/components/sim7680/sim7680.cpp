@@ -358,6 +358,41 @@ bool sim7680_get_network_status(int *status)
     return sscanf(p, "+CREG: %d,%d", &n, status) == 2;
 }
 
+bool sim7680_get_gprs_attach(bool *attached)
+{
+    char resp[64];
+    if (!sim7680_send_cmd("AT+CGATT?", resp, sizeof(resp), 1000)) {
+        return false;
+    }
+
+    char *p = strstr(resp, "+CGATT:");
+    if (!p) {
+        return false;
+    }
+    int value = 0;
+    if (sscanf(p, "+CGATT: %d", &value) != 1) {
+        return false;
+    }
+    *attached = (value == 1);
+    return true;
+}
+
+bool sim7680_wait_network_ready(uint32_t timeout_ms)
+{
+    absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
+    while (absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        int status = 0;
+        bool attached = false;
+        if (sim7680_get_network_status(&status) && status >= 1 && status <= 5 &&
+            sim7680_get_gprs_attach(&attached) && attached) {
+            printf("[SIM] Network registered and attached (CREG=%d, CGATT=1)\n", status);
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    return false;
+}
+
 bool sim7680_check_sim(bool *ready)
 {
     char resp[64] = {0};

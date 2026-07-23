@@ -36,12 +36,12 @@ pico_sdk_init()
 
 add_executable(YD_RP2040_RP2_B2 
     src/main.cpp
-    src/task_bmi160.c
-    src/task_gps.c
-    src/task_sdcard.c
-    src/task_mqtt.c
-    src/task_buzzer.c
-    src/task_ui.c
+    src/tasks/task_bmi160.c
+    src/tasks/task_gps.c
+    src/tasks/task_sdcard.c
+    src/tasks/task_mqtt.c
+    src/tasks/task_buzzer.c
+    src/tasks/task_ui.c
     components/my_mqtt/my_mqtt.cpp
     components/sim7680/sim7680.cpp
     components/sim7680/sim7680.h
@@ -59,8 +59,6 @@ add_executable(YD_RP2040_RP2_B2
     components/algorithm_bmi160/algorithm_bmi160.cpp
     components/xpt2046/xpt2046.h
     components/xpt2046/xpt2046.cpp
-    components/ui/ui.h
-    components/ui/ui.cpp
     components/font5x7/font5x7.cpp
     components/font5x7/font5x7.h
     fatfs/diskio.c
@@ -70,6 +68,7 @@ add_executable(YD_RP2040_RP2_B2
     fatfs/ffconf.h
     fatfs/ffsystem.c
     fatfs/ffunicode.c
+    components/shared_data/shared_data.c
 )
 
 pico_set_program_name(YD_RP2040_RP2_B2 "YD_RP2040_RP2_B2")
@@ -84,6 +83,7 @@ pico_enable_stdio_usb(YD_RP2040_RP2_B2 1)
 target_include_directories(YD_RP2040_RP2_B2 PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/src
+    ${CMAKE_CURRENT_LIST_DIR}/src/tasks
     ${CMAKE_CURRENT_LIST_DIR}/components/my_mqtt
     ${CMAKE_CURRENT_LIST_DIR}/components/sim7680
     ${CMAKE_CURRENT_LIST_DIR}/components/bmi160
@@ -93,7 +93,6 @@ target_include_directories(YD_RP2040_RP2_B2 PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/components/tft
     ${CMAKE_CURRENT_LIST_DIR}/components/algorithm_bmi160
     ${CMAKE_CURRENT_LIST_DIR}/components/xpt2046
-    ${CMAKE_CURRENT_LIST_DIR}/components/ui
     ${CMAKE_CURRENT_LIST_DIR}/components/shared_data
     ${CMAKE_CURRENT_LIST_DIR}/components/font5x7
     ${CMAKE_CURRENT_LIST_DIR}/fatfs

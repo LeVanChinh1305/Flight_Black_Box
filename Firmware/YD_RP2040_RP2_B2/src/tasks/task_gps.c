@@ -4,6 +4,8 @@
 #include "pico/stdlib.h"
 #include <stdio.h>
 
+#include "shared_data.h"
+
 #define GPS_SIMULATE
 #ifdef GPS_SIMULATE
 #define GPS_SIM_LAT_BASE 21.028511f
@@ -91,6 +93,7 @@ void TaskGPS(void *pvParameters) {
     while (NEO6M_Init(&gps_dev, NEO6M_UART_PORT, NEO6M_PIN_TX, NEO6M_PIN_RX,
                       NEO6M_BAUDRATE) != NEO6M_OK) {
         printf("[TaskGPS] Khoi tao NEO-6M that bai, thu lai...\n");
+        record_error(ERROR_GPS_READ);
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     printf("[TaskGPS] Khoi tao NEO-6M thanh cong.\n");
@@ -114,9 +117,15 @@ void TaskGPS(void *pvParameters) {
                 if (xSemaphoreTake(g_mutex_gps_data, pdMS_TO_TICKS(GPS_MUTEX_WAIT_MS)) == pdTRUE) {
                     g_gps_data = tmp;
                     g_gps_data_valid = true;
+                    // Record error if no GPS fix
+                    if (tmp.fix_quality == 0) {
+                        record_error(ERROR_GPS_NO_FIX);
+                    }
                     xSemaphoreGive(g_mutex_gps_data);
                 }
             }
+        } else {
+            record_error(ERROR_GPS_READ);
         }
     }
 #endif

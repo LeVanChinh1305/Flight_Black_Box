@@ -8,11 +8,62 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "shared_data.h"
+
 static FATFS g_fatfs;
 static FIL g_sdlog_file;
 static bool g_sdlog_file_open = false;
 static char g_sdlog_current_name[SDLOG_FILENAME_MAXLEN] = {0};
 static uint32_t g_sdlog_record_count = 0;
+
+// ========== Thresholds for Card Events ==========
+#define CARD_NEAR_FULL_PCT  10   // Cảnh báo khi < 10% free
+#define CARD_PERIODIC_CYCLES 60  // Publish card info mỗi 60 chu kỳ = 60s
+
+static void publish_card_event(const char *event_type, const char *filename,
+                               uint32_t records, uint32_t bytes,
+                               uint32_t free_mb, uint8_t free_pct) {
+    if (!g_mqtt_event_queue) return;
+
+    mqtt_event_t evt = {0};
+    evt.type = 1;  // card_event type
+    
+    if (strcmp(event_type, "start") == 0) {
+        snprintf(evt.payload, sizeof(evt.payload),
+                 "{\"ts\":%u,\"event\":\"start\",\"filename\":\"%s\"}",
+                 xTaskGetTickCount() / 1000, filename);
+    } else if (strcmp(event_type, "periodic") == 0) {
+        snprintf(evt.payload, sizeof(evt.payload),
+                 "{\"ts\":%u,\"event\":\"periodic\",\"filename\":\"%s\","
+                 "\"records\":%lu,\"bytes\":%lu,\"free_mb\":%lu,\"free_pct\":%u}",
+                 xTaskGetTickCount() / 1000, filename,
+                 (unsigned long)records, (unsigned long)bytes,
+                 (unsigned long)free_mb, (unsigned)free_pct);
+    } else if (strcmp(event_type, "stop") == 0) {
+        snprintf(evt.payload, sizeof(evt.payload),
+                 "{\"ts\":%u,\"event\":\"stop\",\"filename\":\"%s\","
+                 "\"records\":%lu,\"bytes\":%lu}",
+                 xTaskGetTickCount() / 1000, filename,
+                 (unsigned long)records, (unsigned long)bytes);
+    } else if (strcmp(event_type, "near_full") == 0) {
+        snprintf(evt.payload, sizeof(evt.payload),
+                 "{\"ts\":%u,\"event\":\"near_full\",\"free_mb\":%lu,\"free_pct\":%u}",
+                 xTaskGetTickCount() / 1000, (unsigned long)free_mb, (unsigned)free_pct);
+    } else if (strcmp(event_type, "full") == 0) {
+        snprintf(evt.payload, sizeof(evt.payload),
+                 "{\"ts\":%u,\"event\":\"full\",\"free_mb\":0,\"free_pct\":0}",
+                 xTaskGetTickCount() / 1000);
+    }
+
+    xQueueSend(g_mqtt_event_queue, &evt, 0);
+    printf("[TaskSDCard] Card event published: %s\n", event_type);
+}
+
+static uint32_t get_card_free_space_pct(void) {
+    // TODO: Implement FatFs f_getfree() to get actual free space
+    // For now return dummy value
+    return 85;
+}
 
 static void SDLog_BuildFileName(char *out, size_t out_len, const neo6m_data_t *gps,
                                 uint32_t minutes) {
@@ -39,6 +90,10 @@ static SD_Status SDLog_OpenNewFile(const char *filename) {
         FSIZE_t size_before_close = f_size(&g_sdlog_file);
         f_close(&g_sdlog_file);
         g_sdlog_file_open = false;
+        
+        // Publish "stop" event
+        publish_card_event("stop", g_sdlog_current_name, g_sdlog_record_count, (uint32_t)size_before_close, 0, 0);
+        
         printf("[TaskSDCard][DEBUG] Da dong file '%s': %lu dong du lieu, %lu byte.\n",
                g_sdlog_current_name, (unsigned long)g_sdlog_record_count,
                (unsigned long)size_before_close);
@@ -67,6 +122,9 @@ static SD_Status SDLog_OpenNewFile(const char *filename) {
     if (g_mutex_spi0)
         xSemaphoreGive(g_mutex_spi0);
 
+    // Publish "start" event
+    publish_card_event("start", filename, 0, 0, 0, 0);
+
     printf("[TaskSDCard][DEBUG] >>> Da MO file log MOI: '%s' (header %u/%u byte, fw=%d)\n",
            filename, (unsigned)bw, (unsigned)(sizeof(header) - 1), fw);
     return SD_OK;
@@ -83,6 +141,7 @@ void TaskSDCard(void *pvParameters) {
         if (g_mutex_spi0)
             xSemaphoreGive(g_mutex_spi0);
         printf("[TaskSDCard] Mount FAT that bai (fr=%d), thu lai...\n", fr);
+        record_error(ERROR_SDCARD_MOUNT);
         vTaskDelay(pdMS_TO_TICKS(SDCARD_MOUNT_RETRY_MS));
         if (g_mutex_spi0)
             xSemaphoreTake(g_mutex_spi0, portMAX_DELAY);
@@ -93,6 +152,7 @@ void TaskSDCard(void *pvParameters) {
 
     uint32_t cycle_count = 0;
     uint32_t elapsed_s = 0;
+    uint8_t last_free_pct = 100;
     char filename[SDLOG_FILENAME_MAXLEN];
     TickType_t lastWake = xTaskGetTickCount();
 
@@ -132,6 +192,9 @@ void TaskSDCard(void *pvParameters) {
                     xSemaphoreGive(g_mutex_spi0);
                 printf("[TaskSDCard][DEBUG] LOI ghi file '%s'! fr=%d (bw=%u/%d)\n",
                        g_sdlog_current_name, wr, (unsigned)bw, len);
+                record_error(ERROR_SDCARD_WRITE);
+                // Publish "full" event on write failure
+                publish_card_event("full", g_sdlog_current_name, g_sdlog_record_count, 0, 0, 0);
             } else {
                 f_sync(&g_sdlog_file);
                 g_sdlog_record_count++;
@@ -140,8 +203,25 @@ void TaskSDCard(void *pvParameters) {
             }
         }
 
+        // Publish periodic card status mỗi CARD_PERIODIC_CYCLES
+        if (g_sdlog_file_open && cycle_count % CARD_PERIODIC_CYCLES == 0) {
+            uint32_t free_pct = get_card_free_space_pct();
+            FSIZE_t file_size = f_size(&g_sdlog_file);
+            publish_card_event("periodic", g_sdlog_current_name,
+                             g_sdlog_record_count, (uint32_t)file_size,
+                             0, (uint8_t)free_pct);  // TODO: Get actual free_mb
+        }
+
+        // Check for near_full or full conditions
+        uint32_t current_free_pct = get_card_free_space_pct();
+        if (current_free_pct < CARD_NEAR_FULL_PCT && last_free_pct >= CARD_NEAR_FULL_PCT) {
+            publish_card_event("near_full", g_sdlog_current_name, g_sdlog_record_count, 0, 0, (uint8_t)current_free_pct);
+        }
+        last_free_pct = current_free_pct;
+
         cycle_count++;
         elapsed_s++;
         vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(SDCARD_WRITE_PERIOD_MS));
     }
 }
+
