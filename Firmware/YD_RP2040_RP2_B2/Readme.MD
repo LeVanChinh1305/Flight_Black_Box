@@ -103,3 +103,7 @@ Giai đoạn 4 — Dashboard
 ├── ⬜ Setup MQTT Broker
 ├── ⬜ Hiển thị bản đồ real-time
 └── ⬜ Giao diện gửi lệnh xuống
+
+
+hướng dẫn nạp code: 
+.\build.ps1

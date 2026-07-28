@@ -65,7 +65,7 @@ int main() {
         }
     }
 
-    printf("=== Flight Black Box - Bat dau chuong trinh ===\n");
+    printf("=== Flight Black Box - Bat dau chuong trinh thôi bro ===\n");
 
     // Tạo các task chính
     BaseType_t ok_BMI160 =  xTaskCreate(TaskBMI160,     "TaskBMI160",   BMI160_TASK_STACK_SIZE, NULL, PRIORITY_TASK_BMI160, NULL);
